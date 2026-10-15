@@ -1,0 +1,10 @@
+[package]
+name = "ember-runtime"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+ember-core = { path = "../ember-core" }
+ember-scene = { path = "../ember-scene" }
+ember-lang = { path = "../ember-lang" }
+ember-vm = { path = "../ember-vm" }

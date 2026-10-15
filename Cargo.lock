@@ -440,6 +440,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "ember-runtime"
+version = "0.1.0"
+dependencies = [
+ "ember-core",
+ "ember-lang",
+ "ember-scene",
+ "ember-vm",
+]
+
+[[package]]
 name = "ember-scene"
 version = "0.1.0"
 dependencies = [

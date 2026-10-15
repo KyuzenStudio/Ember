@@ -98,6 +98,7 @@ impl fmt::Display for RuntimeError {
 
 impl std::error::Error for RuntimeError {}
 
+#[derive(Debug)]
 struct Frame {
     func_idx: usize,
     ip: usize,
@@ -105,6 +106,7 @@ struct Frame {
     base: usize,
 }
 
+#[derive(Debug)]
 pub struct Vm {
     chunk: Chunk,
     globals: Vec<Value>,
@@ -136,6 +138,10 @@ impl Vm {
 
     pub fn globals(&self) -> &[Value] {
         &self.globals
+    }
+
+    pub fn has_function(&self, name: &str) -> bool {
+        self.chunk.functions.iter().any(|f| f.name == name)
     }
 
     pub fn call(
