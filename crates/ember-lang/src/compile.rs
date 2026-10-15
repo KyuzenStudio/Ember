@@ -673,4 +673,70 @@ mod tests {
         verify(&back).unwrap();
         assert_eq!(back, c);
     }
+
+    struct TestHost {
+        keys: Vec<i32>,
+        moves: Vec<(f32, f32)>,
+        logs: Vec<String>,
+    }
+
+    impl ember_vm::Host for TestHost {
+        fn input_down(&mut self, key: i32) -> bool {
+            self.keys.contains(&key)
+        }
+
+        fn transform_move(&mut self, dx: f32, dy: f32) {
+            self.moves.push((dx, dy));
+        }
+
+        fn log(&mut self, msg: &str) {
+            self.logs.push(msg.to_string());
+        }
+    }
+
+    #[test]
+    fn vm_runs_starter_lifecycle() {
+        let c = chunk(STARTER);
+        let mut vm = ember_vm::Vm::new(c).unwrap();
+        let mut host = TestHost {
+            keys: vec![3],
+            moves: vec![],
+            logs: vec![],
+        };
+        vm.call(&mut host, "$init", vec![]).unwrap();
+        vm.call(&mut host, "on_create", vec![]).unwrap();
+        vm.call(&mut host, "on_update", vec![ember_vm::Value::F32(0.5)])
+            .unwrap();
+        assert_eq!(host.logs, vec!["hi".to_string()]);
+        assert_eq!(host.moves, vec![(110.0, 0.0)]);
+        assert_eq!(vm.globals(), &[ember_vm::Value::F32(220.0)]);
+    }
+
+    #[test]
+    fn vm_while_sum() {
+        let src = "var n: i32 = 0\nfn bump() {\nvar i: i32 = 0\nwhile i < 5 {\nn = n + i * 2\ni = i + 1\n}\n}\n";
+        let mut vm = ember_vm::Vm::new(chunk(src)).unwrap();
+        let mut host = TestHost {
+            keys: vec![],
+            moves: vec![],
+            logs: vec![],
+        };
+        vm.call(&mut host, "$init", vec![]).unwrap();
+        vm.call(&mut host, "bump", vec![]).unwrap();
+        assert_eq!(vm.globals(), &[ember_vm::Value::I32(20)]);
+    }
+
+    #[test]
+    fn vm_div_zero_has_source_location() {
+        let src = "fn f() {\nvar x: i32 = 1 / 0\n}\n";
+        let mut vm = ember_vm::Vm::new(chunk(src)).unwrap();
+        let mut host = TestHost {
+            keys: vec![],
+            moves: vec![],
+            logs: vec![],
+        };
+        let err = vm.call(&mut host, "f", vec![]).unwrap_err();
+        assert_eq!((err.line, err.col), (2, 14));
+        assert!(err.to_string().contains("t.em:2:14:"));
+    }
 }
