@@ -56,6 +56,8 @@ pub struct Entity {
     pub transform: Transform2D,
     pub sprite: Option<SpriteRenderer>,
     pub camera: Option<Camera2D>,
+    #[serde(default)]
+    pub script: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -83,6 +85,7 @@ impl Scene {
             transform: Transform2D::default(),
             sprite: None,
             camera: None,
+            script: None,
         });
         id
     }

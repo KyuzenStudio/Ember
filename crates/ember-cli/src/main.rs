@@ -34,8 +34,29 @@ fn version() -> String {
     format!("ember {}", env!("CARGO_PKG_VERSION"))
 }
 
+fn resolve_player_exe() -> Result<std::path::PathBuf, String> {
+    let exe = std::env::current_exe().map_err(|e| format!("locate player: {e}"))?;
+    let name = if cfg!(windows) {
+        "ember-player.exe"
+    } else {
+        "ember-player"
+    };
+    let mut dir = exe.parent().map(|p| p.to_path_buf());
+    for _ in 0..3 {
+        let Some(parent) = dir else {
+            break;
+        };
+        let candidate = parent.join(name);
+        if candidate.is_file() {
+            return Ok(candidate);
+        }
+        dir = parent.parent().map(|p| p.to_path_buf());
+    }
+    Err("ember-player binary not found next to ember; build the workspace first".to_string())
+}
+
 fn usage() -> String {
-    "Usage: ember [--version|--help]\n       ember new <name>\n       ember check [path]\n\nCommands:\n  new <name>      Create a new project in './<name>'\n  check [path]    Check scripts in a project without opening a window\n\nOptions:\n  --version, -V  Print version and exit\n  --help, -h     Print this help and exit\n"
+    "Usage: ember [--version|--help]\n       ember new <name>\n       ember check [path]\n       ember build [path]\n       ember package [path]\n\nCommands:\n  new <name>      Create a new project in './<name>'\n  check [path]    Check scripts in a project without opening a window\n  build [path]    Validate and compile scripts to build/*.embc\n  package [path]  Bundle a standalone Windows game folder\n\nOptions:\n  --version, -V  Print version and exit\n  --help, -h     Print this help and exit\n"
         .to_string()
 }
 
@@ -121,6 +142,74 @@ fn dispatch(args: &[OsString], cwd: &Path) -> Outcome {
             code: 2,
             stdout: String::new(),
             stderr: "error: usage: ember check [path]\n".to_string(),
+        },
+        "build" if args.len() <= 2 => {
+            let dir = if args.len() == 2 {
+                cwd.join(&args[1])
+            } else {
+                cwd.to_path_buf()
+            };
+            match ember_project::build_project(&dir) {
+                Ok(report) => Outcome {
+                    code: 0,
+                    stdout: format!(
+                        "built {} script(s) to '{}'\n",
+                        report.scripts,
+                        dir.join("build").display()
+                    ),
+                    stderr: String::new(),
+                },
+                Err(e) => Outcome {
+                    code: 1,
+                    stdout: String::new(),
+                    stderr: format!("error: {e}\n"),
+                },
+            }
+        }
+        "build" => Outcome {
+            code: 2,
+            stdout: String::new(),
+            stderr: "error: usage: ember build [path]\n".to_string(),
+        },
+        "package" if args.len() <= 2 => {
+            let dir = if args.len() == 2 {
+                cwd.join(&args[1])
+            } else {
+                cwd.to_path_buf()
+            };
+            let player = match resolve_player_exe() {
+                Ok(p) => p,
+                Err(e) => {
+                    return Outcome {
+                        code: 1,
+                        stdout: String::new(),
+                        stderr: format!("error: {e}\n"),
+                    };
+                }
+            };
+            match ember_project::package_project(&dir, &player) {
+                Ok(report) => {
+                    let mut stdout = format!("packaged '{}'\n", report.dir.display());
+                    for file in &report.files {
+                        stdout.push_str(&format!("  {file}\n"));
+                    }
+                    Outcome {
+                        code: 0,
+                        stdout,
+                        stderr: String::new(),
+                    }
+                }
+                Err(e) => Outcome {
+                    code: 1,
+                    stdout: String::new(),
+                    stderr: format!("error: {e}\n"),
+                },
+            }
+        }
+        "package" => Outcome {
+            code: 2,
+            stdout: String::new(),
+            stderr: "error: usage: ember package [path]\n".to_string(),
         },
         _ => Outcome {
             code: 2,
@@ -246,6 +335,51 @@ mod tests {
         let o = dispatch(&[arg("check"), arg("Nope")], &cwd());
         assert_eq!(o.code, 1);
         assert!(o.stderr.contains("not a directory"));
+    }
+
+    #[test]
+    fn dispatch_build_compiles_bytecode() {
+        let base = std::env::temp_dir().join(format!("ember-cli-build-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        ember_project::create_project(&base.join("Game"), "Game").unwrap();
+        let o = dispatch(&[arg("build"), arg("Game")], &base);
+        assert_eq!(o.code, 0);
+        assert!(o.stdout.contains("built 1 script(s)"));
+        let bytes = std::fs::read(base.join("Game").join("build").join("player.embc")).unwrap();
+        assert_eq!(&bytes[0..4], b"EMBC");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn dispatch_build_broken_fails() {
+        let base = std::env::temp_dir().join(format!("ember-cli-buildbad-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        ember_project::create_project(&base.join("Game"), "Game").unwrap();
+        std::fs::write(
+            base.join("Game").join("scripts").join("player.em"),
+            "var x = \n",
+        )
+        .unwrap();
+        let o = dispatch(&[arg("build"), arg("Game")], &base);
+        assert_eq!(o.code, 1);
+        assert!(o.stderr.contains("player.em:1:"));
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn dispatch_package_bundles_player() {
+        let player = resolve_player_exe().expect("player exe must exist after build");
+        let base = std::env::temp_dir().join(format!("ember-cli-pkg-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        ember_project::create_project(&base.join("Game"), "Game").unwrap();
+        let o = dispatch(&[arg("package"), arg("Game")], &base);
+        assert_eq!(o.code, 0, "stderr: {}", o.stderr);
+        let out = base.join("Game").join("dist").join("Game-windows-x86_64");
+        assert!(out.join(player.file_name().unwrap()).is_file());
+        assert!(out.join("build").join("player.embc").is_file());
+        assert!(out.join("assets").join("player.png").is_file());
+        assert!(out.join("scenes").join("main.ron").is_file());
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     #[test]

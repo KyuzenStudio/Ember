@@ -13,6 +13,13 @@ pub struct ScriptDef {
 }
 
 #[derive(Debug)]
+pub struct ChunkDef {
+    pub entity: EntityId,
+    pub file: String,
+    pub chunk: ember_vm::Chunk,
+}
+
+#[derive(Debug)]
 pub enum SpawnError {
     Compile(Vec<ember_lang::Error>),
     Runtime(RuntimeError),
@@ -66,13 +73,49 @@ impl Runtime {
         if !compile_errors.is_empty() {
             return Err(SpawnError::Compile(compile_errors));
         }
-        let mut runtime = Self {
+        Self::start(
             scene,
-            instances: built
+            built
                 .into_iter()
                 .map(|(entity, vm)| Instance { entity, vm })
                 .collect(),
-        };
+            logs,
+        )
+    }
+
+    pub fn load_prebuilt(
+        scene: Scene,
+        chunks: Vec<ChunkDef>,
+        logs: &mut Vec<String>,
+    ) -> Result<Self, SpawnError> {
+        let mut built = Vec::new();
+        for def in chunks {
+            match Vm::new(def.chunk) {
+                Ok(vm) => built.push((def.entity, vm)),
+                Err(e) => {
+                    return Err(SpawnError::Compile(vec![lang_wrap(
+                        &def.file,
+                        e.to_string(),
+                    )]));
+                }
+            }
+        }
+        Self::start(
+            scene,
+            built
+                .into_iter()
+                .map(|(entity, vm)| Instance { entity, vm })
+                .collect(),
+            logs,
+        )
+    }
+
+    fn start(
+        scene: Scene,
+        instances: Vec<Instance>,
+        logs: &mut Vec<String>,
+    ) -> Result<Self, SpawnError> {
+        let mut runtime = Self { scene, instances };
         let idle = InputState::new();
         for i in 0..runtime.instances.len() {
             let entity = runtime.instances[i].entity;

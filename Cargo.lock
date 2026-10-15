@@ -418,11 +418,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "ember-player"
+version = "0.1.0"
+dependencies = [
+ "ember-core",
+ "ember-project",
+ "ember-renderer",
+ "ember-runtime",
+ "ember-scene",
+ "ember-vm",
+ "winit",
+]
+
+[[package]]
 name = "ember-project"
 version = "0.1.0"
 dependencies = [
  "ember-lang",
  "ember-scene",
+ "ember-vm",
  "ron",
  "serde",
 ]
@@ -434,6 +448,7 @@ dependencies = [
  "bytemuck",
  "ember-core",
  "image",
+ "naga",
  "pollster",
  "wgpu",
  "winit",

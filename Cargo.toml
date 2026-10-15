@@ -8,6 +8,7 @@ members = [
     "crates/ember-lang",
     "crates/ember-vm",
     "crates/ember-runtime",
+    "crates/ember-player",
 ]
 resolver = "2"
 

@@ -1,0 +1,21 @@
+[package]
+name = "ember-player"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "ember-player"
+path = "src/main.rs"
+
+[lib]
+name = "ember_player"
+path = "src/lib.rs"
+
+[dependencies]
+ember-core = { path = "../ember-core" }
+ember-scene = { path = "../ember-scene" }
+ember-project = { path = "../ember-project" }
+ember-runtime = { path = "../ember-runtime" }
+ember-renderer = { path = "../ember-renderer" }
+ember-vm = { path = "../ember-vm" }
+winit = "0.30"

@@ -122,6 +122,7 @@ fn starter_scene(name: &str) -> Scene {
             tint: [1.0, 1.0, 1.0, 1.0],
             sorting_order: 0,
         });
+        entity.script = Some(STARTER_SCRIPT.to_string());
     }
     let camera = scene.spawn("MainCamera");
     if let Some(entity) = scene.entities.iter_mut().find(|e| e.id == camera) {
@@ -184,6 +185,16 @@ pub fn load_project(dir: &Path) -> Result<LoadedProject, ProjectError> {
             validate_asset_path(dir, &sprite.texture)
                 .map_err(|e| ProjectError(format!("entity '{}': {e}", entity.name)))?;
         }
+        if let Some(script) = &entity.script {
+            let path = validate_asset_path(dir, script)
+                .map_err(|e| ProjectError(format!("entity '{}': {e}", entity.name)))?;
+            if !path.is_file() {
+                return Err(ProjectError(format!(
+                    "entity '{}': script '{}' not found",
+                    entity.name, script
+                )));
+            }
+        }
     }
     Ok(LoadedProject {
         project,
@@ -239,6 +250,164 @@ pub fn check_dir(dir: &Path) -> Result<CheckReport, ProjectError> {
         checked: names.len(),
         errors,
     })
+}
+
+pub fn script_stems(dir: &Path) -> Result<Vec<String>, ProjectError> {
+    let scripts = dir.join("scripts");
+    let mut names: Vec<String> = Vec::new();
+    if scripts.is_dir() {
+        let entries = std::fs::read_dir(&scripts)
+            .map_err(|e| ProjectError(format!("read '{}': {e}", scripts.display())))?;
+        for entry in entries {
+            let entry =
+                entry.map_err(|e| ProjectError(format!("read '{}': {e}", scripts.display())))?;
+            let path = entry.path();
+            if path.extension().is_some_and(|ext| ext == "em")
+                && let Some(stem) = path.file_stem().and_then(|s| s.to_str())
+            {
+                names.push(stem.to_string());
+            }
+        }
+    }
+    names.sort();
+    Ok(names)
+}
+
+fn copy_dir(src: &Path, dst: &Path) -> Result<(), ProjectError> {
+    std::fs::create_dir_all(dst)
+        .map_err(|e| ProjectError(format!("create '{}': {e}", dst.display())))?;
+    let mut stack = vec![src.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let rel = dir
+            .strip_prefix(src)
+            .map_err(|_| ProjectError(format!("resolve '{}'", dir.display())))?;
+        let target = dst.join(rel);
+        std::fs::create_dir_all(&target)
+            .map_err(|e| ProjectError(format!("create '{}': {e}", target.display())))?;
+        let entries = std::fs::read_dir(&dir)
+            .map_err(|e| ProjectError(format!("read '{}': {e}", dir.display())))?;
+        for entry in entries {
+            let entry =
+                entry.map_err(|e| ProjectError(format!("read '{}': {e}", dir.display())))?;
+            let path = entry.path();
+            if path.is_symlink() {
+                continue;
+            } else if path.is_dir() {
+                stack.push(path);
+            } else if path.is_file() {
+                let rel = path
+                    .strip_prefix(src)
+                    .map_err(|_| ProjectError(format!("resolve '{}'", path.display())))?;
+                let target = dst.join(rel);
+                std::fs::copy(&path, &target)
+                    .map_err(|e| ProjectError(format!("copy '{}': {e}", path.display())))?;
+            }
+        }
+    }
+    Ok(())
+}
+
+#[derive(Debug)]
+pub struct BuildReport {
+    pub scripts: usize,
+}
+
+pub fn build_project(dir: &Path) -> Result<BuildReport, ProjectError> {
+    load_project(dir)?;
+    let report = check_dir(dir)?;
+    if !report.errors.is_empty() {
+        let mut message = String::new();
+        for e in &report.errors {
+            message.push_str(&format!("{e}\n"));
+        }
+        return Err(ProjectError(message));
+    }
+    let build = dir.join("build");
+    std::fs::create_dir_all(&build)
+        .map_err(|e| ProjectError(format!("create '{}': {e}", build.display())))?;
+    for stem in script_stems(dir)? {
+        let src = std::fs::read_to_string(dir.join("scripts").join(format!("{stem}.em")))
+            .map_err(|e| ProjectError(format!("read script '{stem}.em': {e}")))?;
+        let chunk = ember_lang::compile::compile(
+            &dir.join("scripts")
+                .join(format!("{stem}.em"))
+                .display()
+                .to_string(),
+            &src,
+        )
+        .map_err(|errors| {
+            let mut message = String::new();
+            for e in &errors {
+                message.push_str(&format!("{e}\n"));
+            }
+            ProjectError(message)
+        })?;
+        ember_vm::verify(&chunk).map_err(|e| ProjectError(format!("verify '{stem}.em': {e}")))?;
+        let bytes = ember_vm::encode(&chunk);
+        write_file(&build.join(format!("{stem}.embc")), &bytes)?;
+    }
+    Ok(BuildReport {
+        scripts: report.checked,
+    })
+}
+
+#[derive(Debug)]
+pub struct PackageReport {
+    pub dir: PathBuf,
+    pub files: Vec<String>,
+}
+
+pub fn package_project(dir: &Path, player_exe: &Path) -> Result<PackageReport, ProjectError> {
+    let loaded = load_project(dir)?;
+    build_project(dir)?;
+    if !player_exe.is_file() {
+        return Err(ProjectError(format!(
+            "player '{}' not found; build it first",
+            player_exe.display()
+        )));
+    }
+    let out = dir
+        .join("dist")
+        .join(format!("{}-windows-x86_64", loaded.project.name));
+    if out.exists() {
+        std::fs::remove_dir_all(&out)
+            .map_err(|e| ProjectError(format!("clean '{}': {e}", out.display())))?;
+    }
+    std::fs::create_dir_all(&out)
+        .map_err(|e| ProjectError(format!("create '{}': {e}", out.display())))?;
+    let exe_name = player_exe
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "ember-player.exe".to_string());
+    std::fs::copy(player_exe, out.join(&exe_name))
+        .map_err(|e| ProjectError(format!("copy player: {e}")))?;
+    write_file(
+        &out.join(PROJECT_FILE_NAME),
+        std::fs::read(dir.join(PROJECT_FILE_NAME))
+            .map_err(|e| ProjectError(format!("read project: {e}")))?
+            .as_slice(),
+    )?;
+    copy_dir(&dir.join("scenes"), &out.join("scenes"))?;
+    copy_dir(&dir.join("build"), &out.join("build"))?;
+    copy_dir(&dir.join("assets"), &out.join("assets"))?;
+    let mut files = vec![exe_name, PROJECT_FILE_NAME.to_string()];
+    let mut stack = vec![out.join("scenes"), out.join("build"), out.join("assets")];
+    while let Some(top) = stack.pop() {
+        let entries = std::fs::read_dir(&top)
+            .map_err(|e| ProjectError(format!("read '{}': {e}", top.display())))?;
+        for entry in entries {
+            let entry =
+                entry.map_err(|e| ProjectError(format!("read '{}': {e}", top.display())))?;
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+            } else if let Ok(rel) = path.strip_prefix(&out) {
+                files.push(rel.display().to_string());
+            }
+        }
+    }
+    files.sort();
+    Ok(PackageReport { dir: out, files })
 }
 
 #[cfg(test)]
@@ -358,6 +527,64 @@ mod tests {
         let dir = fresh_dir("checkmissing");
         let err = check_dir(&dir).unwrap_err();
         assert!(err.to_string().contains(PROJECT_FILE_NAME));
+    }
+
+    #[test]
+    fn build_produces_verified_embc() {
+        let dir = fresh_dir("buildok");
+        create_project(&dir, "Built").unwrap();
+        let report = build_project(&dir).unwrap();
+        assert_eq!(report.scripts, 1);
+        let bytes = std::fs::read(dir.join("build").join("player.embc")).unwrap();
+        let chunk = ember_vm::decode(&bytes).unwrap();
+        ember_vm::verify(&chunk).unwrap();
+        assert!(!dir.join("build").join("assets").exists());
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn build_rejects_broken_script() {
+        let dir = fresh_dir("buildbad");
+        create_project(&dir, "Bad").unwrap();
+        std::fs::write(dir.join(STARTER_SCRIPT), "var x = \n").unwrap();
+        let err = build_project(&dir).unwrap_err();
+        assert!(err.to_string().contains("player.em:1:"));
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn package_copies_layout() {
+        let dir = fresh_dir("pkg");
+        create_project(&dir, "Packed").unwrap();
+        let fake = dir.join("fake-player.exe");
+        std::fs::write(&fake, b"exe").unwrap();
+        let report = package_project(&dir, &fake).unwrap();
+        assert!(report.dir.join("fake-player.exe").is_file());
+        assert!(report.dir.join("build").join("player.embc").is_file());
+        assert!(report.dir.join("assets").join("player.png").is_file());
+        assert!(report.dir.join("scenes").join("main.ron").is_file());
+        assert!(report.dir.join(PROJECT_FILE_NAME).is_file());
+        assert!(report.files.iter().any(|f| f.contains("player.embc")));
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn package_needs_player() {
+        let dir = fresh_dir("pkgnoplayer");
+        create_project(&dir, "NoPlayer").unwrap();
+        let err = package_project(&dir, &dir.join("missing.exe")).unwrap_err();
+        assert!(err.to_string().contains("not found"));
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn missing_script_source_rejected() {
+        let dir = fresh_dir("noscript");
+        create_project(&dir, "NoScript").unwrap();
+        std::fs::remove_file(dir.join(STARTER_SCRIPT)).unwrap();
+        let err = load_project(&dir).unwrap_err();
+        assert!(err.to_string().contains("not found"));
+        cleanup(&dir);
     }
 
     #[test]
