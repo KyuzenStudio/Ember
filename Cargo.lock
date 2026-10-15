@@ -398,11 +398,28 @@ checksum = "d8b14ccef22fc6f5a8f4d7d768562a182c04ce9a3b3157b91390b52ddfdf1a76"
 [[package]]
 name = "ember-cli"
 version = "0.1.0"
+dependencies = [
+ "ember-project",
+]
 
 [[package]]
 name = "ember-core"
 version = "0.1.0"
 dependencies = [
+ "serde",
+]
+
+[[package]]
+name = "ember-lang"
+version = "0.1.0"
+
+[[package]]
+name = "ember-project"
+version = "0.1.0"
+dependencies = [
+ "ember-lang",
+ "ember-scene",
+ "ron",
  "serde",
 ]
 

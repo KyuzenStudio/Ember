@@ -1,0 +1,10 @@
+[package]
+name = "ember-project"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+ember-lang = { path = "../ember-lang" }
+ember-scene = { path = "../ember-scene" }
+serde = { version = "1", features = ["derive"] }
+ron = "0.12"

@@ -4,6 +4,8 @@ members = [
     "crates/ember-core",
     "crates/ember-renderer",
     "crates/ember-scene",
+    "crates/ember-project",
+    "crates/ember-lang",
 ]
 resolver = "2"
 

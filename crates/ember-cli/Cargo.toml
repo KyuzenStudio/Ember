@@ -6,3 +6,6 @@ edition.workspace = true
 [[bin]]
 name = "ember"
 path = "src/main.rs"
+
+[dependencies]
+ember-project = { path = "../ember-project" }
