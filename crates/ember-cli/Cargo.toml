@@ -1,0 +1,8 @@
+[package]
+name = "ember-cli"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "ember"
+path = "src/main.rs"

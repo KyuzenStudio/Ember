@@ -1,0 +1,9 @@
+[package]
+name = "ember-scene"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+ember-core = { path = "../ember-core" }
+serde = { version = "1", features = ["derive"] }
+ron = "0.12"

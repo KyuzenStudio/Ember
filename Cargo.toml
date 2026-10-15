@@ -1,0 +1,12 @@
+[workspace]
+members = [
+    "crates/ember-cli",
+    "crates/ember-core",
+    "crates/ember-renderer",
+    "crates/ember-scene",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"

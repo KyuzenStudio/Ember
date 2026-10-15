@@ -1,0 +1,12 @@
+[package]
+name = "ember-renderer"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+ember-core = { path = "../ember-core" }
+wgpu = "30"
+winit = "0.30"
+image = { version = "0.25", default-features = false, features = ["png"] }
+pollster = "1"
+bytemuck = { version = "1.25", features = ["derive"] }
