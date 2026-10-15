@@ -412,6 +412,10 @@ dependencies = [
 [[package]]
 name = "ember-lang"
 version = "0.1.0"
+dependencies = [
+ "ember-core",
+ "ember-vm",
+]
 
 [[package]]
 name = "ember-project"
@@ -442,6 +446,13 @@ dependencies = [
  "ember-core",
  "ron",
  "serde",
+]
+
+[[package]]
+name = "ember-vm"
+version = "0.1.0"
+dependencies = [
+ "ember-core",
 ]
 
 [[package]]

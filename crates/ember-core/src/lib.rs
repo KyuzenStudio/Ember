@@ -1,4 +1,7 @@
+use std::fmt;
 use std::ops::{Add, Sub};
+
+pub mod host;
 
 #[derive(Copy, Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Vec2 {
@@ -33,6 +36,44 @@ impl Sub for Vec2 {
 
     fn sub(self, rhs: Self) -> Self {
         Self::new(self.x - rhs.x, self.y - rhs.y)
+    }
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum Ty {
+    I32,
+    F32,
+    Bool,
+    Str,
+    Void,
+}
+
+impl Ty {
+    pub fn name(self) -> &'static str {
+        match self {
+            Ty::I32 => "i32",
+            Ty::F32 => "f32",
+            Ty::Bool => "bool",
+            Ty::Str => "string",
+            Ty::Void => "void",
+        }
+    }
+
+    pub fn from_name(name: &str) -> Option<Ty> {
+        match name {
+            "i32" => Some(Ty::I32),
+            "f32" => Some(Ty::F32),
+            "bool" => Some(Ty::Bool),
+            "string" => Some(Ty::Str),
+            "void" => Some(Ty::Void),
+            _ => None,
+        }
+    }
+}
+
+impl fmt::Display for Ty {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.name())
     }
 }
 

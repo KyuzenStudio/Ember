@@ -2,3 +2,7 @@
 name = "ember-lang"
 version.workspace = true
 edition.workspace = true
+
+[dependencies]
+ember-core = { path = "../ember-core" }
+ember-vm = { path = "../ember-vm" }
