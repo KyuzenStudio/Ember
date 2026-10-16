@@ -13,7 +13,7 @@
 - Tanpa file picker (path diketik). Open eksternal Windows saja.
 - Tanpa undo/redo. Docking/layout editor bawaan eframe.
 - `ember run` belum ada (jalankan via editor Play atau `ember-player`).
-- Audio tidak ada. Fisika/collision ditunda (tercatat, bukan target v0.1).
+- Audio tidak ada. Fisika: body statis/dinamis + collider kotak (Milestone 13 selesai).
 - Sprite 1 unit dunia tinggi × aspek. Maksimal 1024 sprite.
 - Tick berhenti di error script pertama lalu Stop.
 
@@ -21,13 +21,13 @@
 
 - Rapier2D 0.36: body statis/dinamis + collider kotak saja. Tanpa sendi, tanpa raycast.
 - Rotasi terkunci. Gravitasi global (0, -9.81), skala per-body.
-- Fixed timestep 1/60, maksimal 3 step per tick (kelebihan dibuang).
+- Fixed timestep 1/60, maksimal 3 step per tick; sisa dt diakumulasi (aman di 120Hz+).
 - Tak ada API host fisika. Skrip amati lewat transform.
 - Collider tak valid (ukuran ≤ 0) = load gagal dengan pesan jelas.
 
 ## Belum diverifikasi langsung
 
-- Tampilan windowed player/editor di layar (kode lengkap + tes GPU parsial).
+- Tampilan windowed player dari package di layar (kode lengkap + tes regresi tanpa sumber).
 - Performa VM dan renderer (belum diukur).
 - Fuzz input malformed.
 - CI GitHub (belum ada run tercatat; gate lokal hijau).

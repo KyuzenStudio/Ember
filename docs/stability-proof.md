@@ -64,3 +64,11 @@ error: load project: entity 'Player': script 'scripts/player.em' not found |
 | M13 dibuka | Tunda lagi (coret satu) |
 
 Tanda tangan + tanggal: DITDEV 16 10 2026
+
+## Adendum 2026-10-16
+
+- Akar gagal S5 diperbaiki: player/package muat project tanpa sumber `.em`
+  (`load_project_opts` + tes regresi). Uji ulang S5 windowed tertunda.
+- M13 dibuka dan selesai: fisika Rapier2D + HUD Play + fix akumulator sub-step.
+  Penguji verifikasi body jatuh di Play windowed (`phys=true`).
+- Keputusan diperbarui: M13 SELESAI. Sisa terbuka: uji ulang S5 windowed.
