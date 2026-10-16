@@ -49,6 +49,7 @@ impl std::error::Error for SpawnError {}
 #[derive(Debug)]
 struct Instance {
     entity: EntityId,
+    file: String,
     vm: Vm,
     values: HashMap<String, ScriptValue>,
 }
@@ -82,7 +83,7 @@ impl Runtime {
         for def in &scripts {
             match compile(&def.file, &def.source) {
                 Ok(chunk) => match Vm::new(chunk) {
-                    Ok(vm) => built.push((def.entity, vm, def.values.clone())),
+                    Ok(vm) => built.push((def.entity, def.file.clone(), vm, def.values.clone())),
                     Err(e) => compile_errors.push(lang_wrap(&def.file, e.to_string())),
                 },
                 Err(mut errors) => compile_errors.append(&mut errors),
@@ -95,7 +96,12 @@ impl Runtime {
             scene,
             built
                 .into_iter()
-                .map(|(entity, vm, values)| Instance { entity, vm, values })
+                .map(|(entity, file, vm, values)| Instance {
+                    entity,
+                    file,
+                    vm,
+                    values,
+                })
                 .collect(),
             logs,
         )
@@ -109,7 +115,7 @@ impl Runtime {
         let mut built = Vec::new();
         for def in chunks {
             match Vm::new(def.chunk) {
-                Ok(vm) => built.push((def.entity, vm, def.values)),
+                Ok(vm) => built.push((def.entity, def.file.clone(), vm, def.values)),
                 Err(e) => {
                     return Err(SpawnError::Compile(vec![lang_wrap(
                         &def.file,
@@ -122,7 +128,12 @@ impl Runtime {
             scene,
             built
                 .into_iter()
-                .map(|(entity, vm, values)| Instance { entity, vm, values })
+                .map(|(entity, file, vm, values)| Instance {
+                    entity,
+                    file,
+                    vm,
+                    values,
+                })
                 .collect(),
             logs,
         )
@@ -150,6 +161,9 @@ impl Runtime {
             pending_title: None,
             restart_requested: false,
         };
+        if let Some(music) = runtime.scene.music.clone() {
+            runtime.pending_audio.push(AudioCmd::Loop(music));
+        }
         let idle = InputState::new();
         let no_edge: HashSet<i32> = HashSet::new();
         for i in 0..runtime.instances.len() {
@@ -363,11 +377,17 @@ impl Runtime {
         Ok(())
     }
 
-    pub fn set_global(&mut self, entity: EntityId, name: &str, value: Value) -> Result<(), String> {
+    pub fn set_global(
+        &mut self,
+        entity: EntityId,
+        file: &str,
+        name: &str,
+        value: Value,
+    ) -> Result<(), String> {
         let inst = self
             .instances
             .iter_mut()
-            .find(|i| i.entity == entity)
+            .find(|i| i.entity == entity && i.file == file)
             .ok_or_else(|| "entity has no running script".to_string())?;
         let idx = inst
             .vm
@@ -1078,6 +1098,52 @@ mod tests {
         assert!(
             logs.contains(&"c ended:Ground".to_string()),
             "missing end on box: {logs:?}"
+        );
+    }
+
+    #[test]
+    fn two_scripts_share_entity_with_own_state() {
+        let mut scene = Scene::new("two");
+        let id = scene.spawn("E");
+        let src_a = "var n: i32 = 0\nfn on_update(dt: f32) {\nn = n + 1\nlog(str.cat(\"a:\", str.of_i(n)))\n}\n";
+        let src_b = "var n: i32 = 10\nfn on_update(dt: f32) {\nn = n + 1\nlog(str.cat(\"b:\", str.of_i(n)))\n}\n";
+        let mut rt = Runtime::load(
+            scene,
+            vec![
+                ScriptDef {
+                    entity: id,
+                    file: "a.em".to_string(),
+                    source: src_a.to_string(),
+                    values: HashMap::new(),
+                },
+                ScriptDef {
+                    entity: id,
+                    file: "b.em".to_string(),
+                    source: src_b.to_string(),
+                    values: HashMap::new(),
+                },
+            ],
+            &mut Vec::new(),
+        )
+        .unwrap();
+        let mut logs = Vec::new();
+        rt.tick(&mut InputState::new(), 0.5, &mut logs).unwrap();
+        assert_eq!(logs, vec!["a:1".to_string(), "b:11".to_string()]);
+        assert_eq!(rt.global(id, "n"), Some(Value::I32(1)));
+        rt.set_global(id, "b.em", "n", Value::I32(99)).unwrap();
+        let mut logs = Vec::new();
+        rt.tick(&mut InputState::new(), 0.5, &mut logs).unwrap();
+        assert_eq!(logs, vec!["a:2".to_string(), "b:100".to_string()]);
+    }
+
+    #[test]
+    fn scene_music_queued_as_loop() {
+        let (mut scene, _) = scene_with_player();
+        scene.music = Some("assets/m.ogg".to_string());
+        let mut rt = Runtime::load(scene, vec![], &mut Vec::new()).unwrap();
+        assert_eq!(
+            rt.take_audio(),
+            vec![AudioCmd::Loop("assets/m.ogg".to_string())]
         );
     }
 }

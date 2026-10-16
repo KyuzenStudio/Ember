@@ -1,7 +1,8 @@
 # Format project dan scene
 
-Hanya RON di v0.1. Versi format project: 1. Versi format scene: 3 (loader terima
-v1–v3; save selalu tulis versi terbaru).
+Hanya RON di v0.1. Versi format project: 1. Versi format scene: 5 (loader terima
+v1–v5; save selalu tulis versi terbaru; field `script`/`script_values` lama
+dimigrasi ke `scripts` saat load).
 
 ## Layout project (`ember new`)
 
@@ -29,6 +30,7 @@ MyGame/
 ## Scene (`scenes/*.ron`)
 
 Scene berisi `entities` dengan ID stabil (`u64`, dipertahankan saat save/load).
+Opsional tingkat scene: `music` (path `.wav`/`.ogg`, loop otomatis saat Play).
 Komponen per entity:
 
 | Field | Isi |
@@ -36,8 +38,9 @@ Komponen per entity:
 | `transform` | `position`, `rotation_degrees`, `scale` |
 | `sprite` | `texture` (path relatif), `tint` rgba, `sorting_order` |
 | `camera` | `height` (unit dunia vertikal) |
-| `script` | path `.em` relatif (opsional) |
-| `script_values` | override nama→nilai (`I32`/`F32`/`Bool`/`Str`) |
+| `script` | path `.em` relatif (lama, dimigrasi ke `scripts`) |
+| `script_values` | override nama→nilai (lama, dimigrasi ke `scripts`) |
+| `scripts` | daftar `{path, values}` — entity boleh punya banyak script |
 | `collider` | `hx`, `hy` setengah ukuran kotak, `sensor` (opsional) |
 | `rigidbody` | `kind` (`Static`/`Dynamic`), `velocity`, `gravity_scale` (opsional) |
 | `anim` | `clips` (nama, `frames`, `fps`, `looped`), `current`, `t` (opsional) |

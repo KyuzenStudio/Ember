@@ -1,7 +1,7 @@
 use std::fmt;
 use std::path::{Component, Path, PathBuf};
 
-use ember_scene::{Camera2D, Scene, SpriteRenderer};
+use ember_scene::{Camera2D, Scene, ScriptEntry, SpriteRenderer};
 use serde::{Deserialize, Serialize};
 
 pub const PROJECT_FORMAT_VERSION: u32 = 1;
@@ -122,7 +122,10 @@ fn starter_scene(name: &str) -> Scene {
             tint: [1.0, 1.0, 1.0, 1.0],
             sorting_order: 0,
         });
-        entity.script = Some(STARTER_SCRIPT.to_string());
+        entity.scripts = vec![ScriptEntry {
+            path: STARTER_SCRIPT.to_string(),
+            values: std::collections::HashMap::new(),
+        }];
     }
     let camera = scene.spawn("MainCamera");
     if let Some(entity) = scene.entities.iter_mut().find(|e| e.id == camera) {
@@ -192,13 +195,13 @@ pub fn load_project_opts(
             validate_asset_path(dir, &sprite.texture)
                 .map_err(|e| ProjectError(format!("entity '{}': {e}", entity.name)))?;
         }
-        if let Some(script) = &entity.script {
-            let path = validate_asset_path(dir, script)
+        for entry in &entity.scripts {
+            let path = validate_asset_path(dir, &entry.path)
                 .map_err(|e| ProjectError(format!("entity '{}': {e}", entity.name)))?;
             if check_script_sources && !path.is_file() {
                 return Err(ProjectError(format!(
                     "entity '{}': script '{}' not found",
-                    entity.name, script
+                    entity.name, entry.path
                 )));
             }
         }
@@ -315,8 +318,13 @@ pub fn import_asset(dir: &Path, src: &Path) -> Result<String, ProjectError> {
         .and_then(|s| s.to_str())
         .filter(|s| !s.is_empty() && *s != "." && *s != "..")
         .ok_or_else(|| ProjectError(format!("bad asset name '{}'", src.display())))?;
-    if !name.to_lowercase().ends_with(".png") {
-        return Err(ProjectError(format!("asset '{name}' is not a PNG")));
+    if !name.to_lowercase().ends_with(".png")
+        && !name.to_lowercase().ends_with(".wav")
+        && !name.to_lowercase().ends_with(".ogg")
+    {
+        return Err(ProjectError(format!(
+            "asset '{name}' must be .png, .wav, or .ogg"
+        )));
     }
     let rel = format!("assets/{name}");
     let dst = dir.join(&rel);
@@ -327,7 +335,9 @@ pub fn import_asset(dir: &Path, src: &Path) -> Result<String, ProjectError> {
     }
     let bytes =
         std::fs::read(src).map_err(|e| ProjectError(format!("read '{}': {e}", src.display())))?;
-    if bytes.len() < PNG_MAGIC.len() || bytes[..PNG_MAGIC.len()] != PNG_MAGIC {
+    if name.to_lowercase().ends_with(".png")
+        && (bytes.len() < PNG_MAGIC.len() || bytes[..PNG_MAGIC.len()] != PNG_MAGIC)
+    {
         return Err(ProjectError(format!("asset '{name}' is not a PNG")));
     }
     write_file(&dst, &bytes)?;
@@ -668,11 +678,25 @@ mod tests {
         let fake = dir.join("note.txt");
         std::fs::write(&fake, b"hello").unwrap();
         let err = import_asset(&dir, &fake).unwrap_err();
-        assert!(err.to_string().contains("not a PNG"));
+        assert!(err.to_string().contains("must be .png, .wav, or .ogg"));
         let fake_png = dir.join("fake.png");
         std::fs::write(&fake_png, b"not png bytes").unwrap();
         let err = import_asset(&dir, &fake_png).unwrap_err();
         assert!(err.to_string().contains("not a PNG"));
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn import_accepts_wav_and_ogg() {
+        let dir = fresh_dir("importaudio");
+        create_project(&dir, "ImpAudio").unwrap();
+        let wav = dir.join("s.wav");
+        std::fs::write(&wav, b"RIFF....WAVE").unwrap();
+        assert_eq!(import_asset(&dir, &wav).unwrap(), "assets/s.wav");
+        let ogg = dir.join("m.ogg");
+        std::fs::write(&ogg, b"OggS....").unwrap();
+        assert_eq!(import_asset(&dir, &ogg).unwrap(), "assets/m.ogg");
+        assert!(dir.join("assets/s.wav").is_file());
         cleanup(&dir);
     }
 

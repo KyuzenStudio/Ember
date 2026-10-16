@@ -4,7 +4,7 @@ use std::path::Path;
 use ember_core::Vec2;
 use serde::{Deserialize, Serialize};
 
-pub const SCENE_FORMAT_VERSION: u32 = 3;
+pub const SCENE_FORMAT_VERSION: u32 = 5;
 
 #[derive(Debug, Clone)]
 pub struct SceneError(String);
@@ -108,6 +108,13 @@ pub struct RigidBody2D {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ScriptEntry {
+    pub path: String,
+    #[serde(default)]
+    pub values: std::collections::HashMap<String, ScriptValue>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum ScriptValue {
     I32(i32),
     F32(f32),
@@ -126,6 +133,8 @@ pub struct Entity {
     pub script: Option<String>,
     #[serde(default)]
     pub script_values: std::collections::HashMap<String, ScriptValue>,
+    #[serde(default)]
+    pub scripts: Vec<ScriptEntry>,
     #[serde(default)]
     pub collider: Option<Collider2D>,
     #[serde(default)]
@@ -166,6 +175,8 @@ pub struct Scene {
     pub format_version: u32,
     pub name: String,
     pub entities: Vec<Entity>,
+    #[serde(default)]
+    pub music: Option<String>,
 }
 
 impl Scene {
@@ -174,6 +185,7 @@ impl Scene {
             format_version: SCENE_FORMAT_VERSION,
             name: name.to_string(),
             entities: Vec::new(),
+            music: None,
         }
     }
 
@@ -188,6 +200,7 @@ impl Scene {
             camera: None,
             script: None,
             script_values: std::collections::HashMap::new(),
+            scripts: Vec::new(),
             collider: None,
             rigidbody: None,
             anim: None,
@@ -205,7 +218,7 @@ impl Scene {
     }
 
     pub fn load_from_str(src: &str, source: &str) -> Result<Self, SceneError> {
-        let scene: Scene =
+        let mut scene: Scene =
             ron::from_str(src).map_err(|e| SceneError(format!("parse '{source}': {e}")))?;
         if !(1..=SCENE_FORMAT_VERSION).contains(&scene.format_version) {
             return Err(SceneError(format!(
@@ -220,6 +233,16 @@ impl Scene {
                     "parse '{source}': duplicate entity id {}",
                     entity.id.0
                 )));
+            }
+        }
+        for entity in &mut scene.entities {
+            if entity.scripts.is_empty()
+                && let Some(path) = entity.script.take()
+            {
+                entity.scripts.push(ScriptEntry {
+                    path,
+                    values: std::mem::take(&mut entity.script_values),
+                });
             }
         }
         Ok(scene)
@@ -276,13 +299,15 @@ mod tests {
         let mut scene = sample_scene();
         let first = scene.entities[0].id;
         let entity = scene.entities.iter_mut().find(|e| e.id == first).unwrap();
-        entity.script = Some("scripts/player.em".to_string());
-        entity
-            .script_values
-            .insert("speed".to_string(), ScriptValue::F32(6.0));
-        entity
-            .script_values
-            .insert("lives".to_string(), ScriptValue::I32(3));
+        entity.scripts = vec![ScriptEntry {
+            path: "scripts/player.em".to_string(),
+            values: [
+                ("speed".to_string(), ScriptValue::F32(6.0)),
+                ("lives".to_string(), ScriptValue::I32(3)),
+            ]
+            .into_iter()
+            .collect(),
+        }];
         let loaded = Scene::load_from_str(&scene.save_to_string().unwrap(), "test").unwrap();
         assert_eq!(loaded, scene);
     }
@@ -451,6 +476,52 @@ mod tests {
             t: 0.0,
         };
         assert_eq!(missing.frame_at(0.0), None);
+    }
+
+    #[test]
+    fn music_round_trip_and_old_default() {
+        let mut scene = Scene::new("muz");
+        scene.music = Some("assets/m.ogg".to_string());
+        let loaded = Scene::load_from_str(&scene.save_to_string().unwrap(), "test").unwrap();
+        assert_eq!(loaded, scene);
+        let src = "(format_version: 2, name: \"old\", entities: [])";
+        let old = Scene::load_from_str(src, "old.ron").unwrap();
+        assert!(old.music.is_none());
+    }
+
+    #[test]
+    fn legacy_script_migrates_to_entries() {
+        let src = "(format_version: 4, name: \"old\", entities: [(
+            id: (1), name: \"E\", transform: (position: (x: 0.0, y: 0.0),
+            rotation_degrees: 0.0, scale: (x: 1.0, y: 1.0)),
+            sprite: None, camera: None, script: Some(\"scripts/a.em\"),
+            script_values: {}, collider: None, rigidbody: None)])";
+        let loaded = Scene::load_from_str(src, "old.ron").unwrap();
+        let e = &loaded.entities[0];
+        assert_eq!(e.scripts.len(), 1);
+        assert_eq!(e.scripts[0].path, "scripts/a.em");
+        assert!(e.script.is_none());
+    }
+
+    #[test]
+    fn multi_script_round_trip() {
+        let mut scene = Scene::new("multi");
+        let id = scene.spawn("E");
+        let e = scene.entities.iter_mut().find(|e| e.id == id).unwrap();
+        e.scripts = vec![
+            ScriptEntry {
+                path: "scripts/a.em".to_string(),
+                values: [("x".to_string(), ScriptValue::I32(1))]
+                    .into_iter()
+                    .collect(),
+            },
+            ScriptEntry {
+                path: "scripts/b.em".to_string(),
+                values: std::collections::HashMap::new(),
+            },
+        ];
+        let loaded = Scene::load_from_str(&scene.save_to_string().unwrap(), "test").unwrap();
+        assert_eq!(loaded, scene);
     }
 
     #[test]

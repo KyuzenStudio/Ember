@@ -28,32 +28,32 @@ pub fn load_game(dir: &Path) -> Result<GameDef, GameError> {
         .map_err(|e| GameError(format!("load project: {e}")))?;
     let mut scripts = Vec::new();
     for entity in &loaded.scene.entities {
-        let Some(script) = &entity.script else {
-            continue;
-        };
-        let stem = script_stem(script).ok_or_else(|| {
-            GameError(format!(
-                "entity '{}': nested scripts not supported in v0.1",
-                entity.name
-            ))
-        })?;
-        let rel = format!("build/{stem}.embc");
-        let path = dir.join(&rel);
-        if !path.is_file() {
-            return Err(GameError(format!(
-                "entity '{}': '{rel}' missing; run ember build first",
-                entity.name
-            )));
+        for entry in &entity.scripts {
+            let stem = script_stem(&entry.path).ok_or_else(|| {
+                GameError(format!(
+                    "entity '{}': nested scripts not supported in v0.1",
+                    entity.name
+                ))
+            })?;
+            let rel = format!("build/{stem}.embc");
+            let path = dir.join(&rel);
+            if !path.is_file() {
+                return Err(GameError(format!(
+                    "entity '{}': '{rel}' missing; run ember build first",
+                    entity.name
+                )));
+            }
+            let bytes =
+                std::fs::read(&path).map_err(|e| GameError(format!("read '{rel}': {e}")))?;
+            let chunk =
+                ember_vm::decode(&bytes).map_err(|e| GameError(format!("decode '{rel}': {e}")))?;
+            scripts.push(ChunkDef {
+                entity: entity.id,
+                file: rel,
+                chunk,
+                values: entry.values.clone(),
+            });
         }
-        let bytes = std::fs::read(&path).map_err(|e| GameError(format!("read '{rel}': {e}")))?;
-        let chunk =
-            ember_vm::decode(&bytes).map_err(|e| GameError(format!("decode '{rel}': {e}")))?;
-        scripts.push(ChunkDef {
-            entity: entity.id,
-            file: rel,
-            chunk,
-            values: entity.script_values.clone(),
-        });
     }
     Ok(GameDef {
         dir: dir.to_path_buf(),

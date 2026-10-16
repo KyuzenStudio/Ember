@@ -25,7 +25,12 @@ pub struct EditorApp {
     project_name: String,
     scene: Scene,
     scene_rel: String,
-    selection: Option<EntityId>,
+    selection: Vec<EntityId>,
+    undo: Vec<String>,
+    redo: Vec<String>,
+    anim_clip_name: String,
+    anim_frame_path: String,
+    scene_music_buf: String,
     status: String,
     console: Vec<String>,
     diag: Vec<String>,
@@ -33,7 +38,8 @@ pub struct EditorApp {
     diag_sel: Option<String>,
     assets: Vec<String>,
     import_src: String,
-    script_buf: String,
+    comp_search: String,
+    add_menu_open: bool,
     off: Option<Offscreen>,
     tex: Option<egui::TextureId>,
     tex_size: (u32, u32),
@@ -159,6 +165,68 @@ fn log_line(log: &mut Vec<String>, line: String) {
     }
 }
 
+fn chevron_button(ui: &mut egui::Ui, open: bool) -> egui::Response {
+    let size = egui::vec2(16.0, 16.0);
+    let (rect, resp) = ui.allocate_exact_size(size, egui::Sense::click());
+    let c = rect.center();
+    let s = 4.0;
+    let points = if open {
+        vec![
+            egui::pos2(c.x - s, c.y - s * 0.6),
+            egui::pos2(c.x + s, c.y - s * 0.6),
+            egui::pos2(c.x, c.y + s * 0.6),
+        ]
+    } else {
+        vec![
+            egui::pos2(c.x - s * 0.6, c.y - s),
+            egui::pos2(c.x - s * 0.6, c.y + s),
+            egui::pos2(c.x + s * 0.6, c.y),
+        ]
+    };
+    ui.painter().add(egui::Shape::convex_polygon(
+        points,
+        ui.visuals().text_color(),
+        egui::Stroke::NONE,
+    ));
+    resp.on_hover_text(if open { "hide" } else { "show" })
+}
+fn script_stem(path: &str) -> &str {
+    path.rsplit('/')
+        .next()
+        .unwrap_or(path)
+        .strip_suffix(".em")
+        .unwrap_or(path)
+}
+
+fn component_header(
+    ui: &mut egui::Ui,
+    salt: (&str, u64),
+    title: &str,
+    menu: impl FnOnce(&mut egui::Ui),
+) -> bool {
+    use egui::collapsing_header::CollapsingState;
+    let id = ui.make_persistent_id(salt);
+    let mut state = CollapsingState::load_with_default_open(ui.ctx(), id, true);
+    let open = state.is_open();
+    ui.horizontal(|ui| {
+        if chevron_button(ui, open).clicked() {
+            state.toggle(ui);
+        }
+        ui.label(title);
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            let resp = ui.menu_button("", menu).response;
+            let c = resp.rect.center();
+            let color = ui.visuals().text_color();
+            for dy in [-4.0, 0.0, 4.0] {
+                ui.painter()
+                    .circle_filled(egui::pos2(c.x, c.y + dy), 1.8, color);
+            }
+        });
+    });
+    state.store(ui.ctx());
+    state.is_open()
+}
+
 fn open_external(path: &Path) -> Result<(), String> {
     #[cfg(windows)]
     {
@@ -182,7 +250,12 @@ impl EditorApp {
             project_name: String::new(),
             scene: Scene::new("untitled"),
             scene_rel: ember_project::STARTUP_SCENE.to_string(),
-            selection: None,
+            selection: Vec::new(),
+            undo: Vec::new(),
+            redo: Vec::new(),
+            anim_clip_name: "walk".to_string(),
+            anim_frame_path: String::new(),
+            scene_music_buf: String::new(),
             status: String::new(),
             console: Vec::new(),
             diag: Vec::new(),
@@ -190,7 +263,8 @@ impl EditorApp {
             diag_sel: None,
             assets: Vec::new(),
             import_src: String::new(),
-            script_buf: String::new(),
+            comp_search: String::new(),
+            add_menu_open: false,
             off: None,
             tex: None,
             tex_size: (0, 0),
@@ -213,22 +287,114 @@ impl EditorApp {
         self.play.is_some()
     }
 
+    fn primary(&self) -> Option<EntityId> {
+        self.selection.first().copied()
+    }
+
+    fn select_only(&mut self, id: EntityId) {
+        self.selection = vec![id];
+    }
+
+    fn toggle_select(&mut self, id: EntityId) {
+        if let Some(i) = self.selection.iter().position(|s| *s == id) {
+            self.selection.remove(i);
+        } else {
+            self.selection.push(id);
+        }
+    }
+
+    fn push_undo(undo: &mut Vec<String>, redo: &mut Vec<String>, scene: &Scene) {
+        if let Ok(ron) = scene.save_to_string() {
+            undo.push(ron);
+            if undo.len() > 100 {
+                undo.remove(0);
+            }
+            redo.clear();
+        }
+    }
+
+    fn apply_snapshot(&mut self, ron: &str) {
+        match Scene::load_from_str(ron, "undo") {
+            Ok(scene) => {
+                self.scene = scene;
+                let valid: HashSet<EntityId> = self.scene.entities.iter().map(|e| e.id).collect();
+                self.selection.retain(|id| valid.contains(id));
+            }
+            Err(e) => self.log(format!("error: {e}")),
+        }
+    }
+
+    fn undo(&mut self) {
+        if self.play.is_some() {
+            return;
+        }
+        let Ok(cur) = self.scene.save_to_string() else {
+            return;
+        };
+        if let Some(ron) = self.undo.pop() {
+            self.redo.push(cur);
+            self.apply_snapshot(&ron);
+        }
+    }
+
+    fn redo(&mut self) {
+        if self.play.is_some() {
+            return;
+        }
+        let Ok(cur) = self.scene.save_to_string() else {
+            return;
+        };
+        if let Some(ron) = self.redo.pop() {
+            self.undo.push(cur);
+            self.apply_snapshot(&ron);
+        }
+    }
+
+    fn delete_selection(&mut self) {
+        if self.selection.is_empty() {
+            return;
+        }
+        if self.play.is_none() {
+            Self::push_undo(&mut self.undo, &mut self.redo, &self.scene);
+        }
+        let ids = std::mem::take(&mut self.selection);
+        let scene: &mut Scene = match &mut self.play {
+            Some(p) => p.runtime.scene_mut(),
+            None => &mut self.scene,
+        };
+        scene.entities.retain(|e| !ids.contains(&e.id));
+    }
+
+    fn move_selection(&mut self, dx: f32, dy: f32) {
+        if self.selection.is_empty() || (dx == 0.0 && dy == 0.0) {
+            return;
+        }
+        let ids = self.selection.clone();
+        let scene: &mut Scene = match &mut self.play {
+            Some(p) => p.runtime.scene_mut(),
+            None => &mut self.scene,
+        };
+        for entity in scene.entities.iter_mut().filter(|e| ids.contains(&e.id)) {
+            entity.transform.position.x += dx;
+            entity.transform.position.y += dy;
+        }
+    }
+
     fn build_play_runtime(&mut self) -> Result<Runtime, String> {
         let mut defs = Vec::new();
         for entity in &self.scene.entities {
-            let Some(script) = &entity.script else {
-                continue;
-            };
-            let path = self.dir.join(script);
-            match std::fs::read_to_string(&path) {
-                Ok(source) => defs.push(ScriptDef {
-                    entity: entity.id,
-                    file: script.clone(),
-                    source,
-                    values: entity.script_values.clone(),
-                }),
-                Err(e) => {
-                    return Err(format!("read '{}': {e}", path.display()));
+            for entry in &entity.scripts {
+                let path = self.dir.join(&entry.path);
+                match std::fs::read_to_string(&path) {
+                    Ok(source) => defs.push(ScriptDef {
+                        entity: entity.id,
+                        file: entry.path.clone(),
+                        source,
+                        values: entry.values.clone(),
+                    }),
+                    Err(e) => {
+                        return Err(format!("read '{}': {e}", path.display()));
+                    }
                 }
             }
         }
@@ -263,7 +429,7 @@ impl EditorApp {
                 if self.audio.is_none() {
                     self.audio = Some(ember_audio::AudioEngine::open());
                 }
-                self.selection = None;
+                self.selection.clear();
                 self.log("playing".to_string());
             }
             Err(message) => self.log(format!("error: {message}")),
@@ -275,7 +441,7 @@ impl EditorApp {
             if let Some(engine) = &mut self.audio {
                 engine.stop();
             }
-            self.selection = None;
+            self.selection.clear();
             self.log("stopped".to_string());
         }
     }
@@ -358,10 +524,27 @@ impl EditorApp {
             }
             Out::Failed(message) => {
                 self.play = None;
-                self.selection = None;
+                self.selection.clear();
                 self.log(format!("error: {message}"));
             }
         }
+    }
+
+    fn set_scene_music(&mut self, raw: &str) -> Result<(), String> {
+        let path = raw.trim();
+        if path.is_empty() {
+            self.scene.music = None;
+            return Ok(());
+        }
+        let lower = path.to_lowercase();
+        if !(lower.ends_with(".wav") || lower.ends_with(".ogg")) {
+            return Err(format!("music '{path}' must be .wav or .ogg"));
+        }
+        if !self.dir.join(path).is_file() {
+            return Err(format!("music '{path}' not found in project"));
+        }
+        self.scene.music = Some(path.to_string());
+        Ok(())
     }
 
     fn log(&mut self, line: String) {
@@ -392,7 +575,7 @@ impl EditorApp {
                 self.project_name = loaded.project.name.clone();
                 self.scene_rel = loaded.project.startup_scene.clone();
                 self.scene = loaded.scene;
-                self.selection = None;
+                self.selection.clear();
                 self.refresh_lists();
                 self.log(format!("opened '{}'", self.project_name));
             }
@@ -475,20 +658,39 @@ impl EditorApp {
                 if ui.button("Reload").clicked() {
                     self.reload();
                 }
+                let can_history = !self.playing();
+                if ui
+                    .add_enabled(
+                        can_history && !self.undo.is_empty(),
+                        egui::Button::new("Undo"),
+                    )
+                    .clicked()
+                {
+                    self.undo();
+                }
+                if ui
+                    .add_enabled(
+                        can_history && !self.redo.is_empty(),
+                        egui::Button::new("Redo"),
+                    )
+                    .clicked()
+                {
+                    self.redo();
+                }
                 if !self.playing() {
                     if ui.button("Play").clicked() {
                         self.start_play();
                     }
                 } else {
-                    if let Some(play) = &self.play {
-                        ui.label(format!(
-                            "PLAY t={:.1}s n={} dt={:.1}ms phys={}",
-                            play.sim_t,
-                            play.ticks,
-                            play.last_dt * 1000.0,
-                            play.runtime.physics_active()
-                        ));
-                    }
+                    // if let Some(play) = &self.play {
+                    //     ui.label(format!(
+                    //         "PLAY t={:.1}s n={} dt={:.1}ms phys={}",
+                    //         play.sim_t,
+                    //         play.ticks,
+                    //         play.last_dt * 1000.0,
+                    //         play.runtime.physics_active()
+                    //     ));
+                    // }
                     if ui.button("Stop").clicked() {
                         self.stop_play();
                     }
@@ -510,22 +712,18 @@ impl EditorApp {
             .map(|e| (e.id, e.name.clone()))
             .collect();
             for (id, name) in ids {
-                let selected = self.selection == Some(id);
+                let selected = self.selection.contains(&id);
                 if ui
                     .selectable_label(selected, format!("{name} ({})", id.0))
                     .clicked()
                 {
-                    self.selection = Some(id);
-                    self.rename = name;
-                    self.script_buf = match &self.play {
-                        Some(p) => p.runtime.scene(),
-                        None => &self.scene,
+                    let ctrl = ui.ctx().input(|i| i.modifiers.ctrl);
+                    if ctrl {
+                        self.toggle_select(id);
+                    } else {
+                        self.select_only(id);
                     }
-                    .entities
-                    .iter()
-                    .find(|e| e.id == id)
-                    .and_then(|e| e.script.clone())
-                    .unwrap_or_default();
+                    self.rename = name;
                 }
             }
             ui.separator();
@@ -533,31 +731,19 @@ impl EditorApp {
                 ui.text_edit_singleline(&mut self.new_name);
                 if ui.button("+ Entity").clicked() && !self.new_name.is_empty() {
                     let name = self.new_name.clone();
+                    if self.play.is_none() {
+                        Self::push_undo(&mut self.undo, &mut self.redo, &self.scene);
+                    }
                     let scene: &mut Scene = match &mut self.play {
                         Some(p) => p.runtime.scene_mut(),
                         None => &mut self.scene,
                     };
                     let id = scene.spawn(&name);
-                    self.selection = Some(id);
+                    self.select_only(id);
                 }
             });
-            if self.selection.is_some_and(|id| {
-                match &self.play {
-                    Some(p) => p.runtime.scene(),
-                    None => &self.scene,
-                }
-                .entities
-                .iter()
-                .any(|e| e.id == id)
-            }) && ui.button("Delete").clicked()
-                && let Some(id) = self.selection
-            {
-                let scene: &mut Scene = match &mut self.play {
-                    Some(p) => p.runtime.scene_mut(),
-                    None => &mut self.scene,
-                };
-                scene.entities.retain(|e| e.id != id);
-                self.selection = None;
+            if !self.selection.is_empty() && ui.button("Delete").clicked() {
+                self.delete_selection();
             }
             ui.separator();
             ui.heading("Assets");
@@ -567,7 +753,7 @@ impl EditorApp {
             ui.horizontal(|ui| {
                 ui.add(
                     egui::TextEdit::singleline(&mut self.import_src)
-                        .hint_text("PNG source path, absolute or from terminal dir"),
+                        .hint_text("Asset source path (.png/.wav/.ogg)"),
                 );
                 if ui.button("Import").clicked() {
                     let src = PathBuf::from(self.import_src.clone());
@@ -683,20 +869,32 @@ impl EditorApp {
             if playing {
                 ui.label("PLAYING — edits are temporary");
             }
-            let selection = self.selection;
-            let linked: Option<(String, HashMap<String, ScriptValue>)> = {
+            if self.selection.len() > 1 {
+                ui.label(format!("{} selected (editing first)", self.selection.len()));
+            }
+            let selection = self.primary();
+            let linked: Vec<(String, HashMap<String, ScriptValue>)> = {
                 let scene: &Scene = match &self.play {
                     Some(p) => p.runtime.scene(),
                     None => &self.scene,
                 };
                 selection
                     .and_then(|id| scene.entities.iter().find(|e| e.id == id))
-                    .and_then(|e| e.script.clone().map(|s| (s, e.script_values.clone())))
+                    .map(|e| {
+                        e.scripts
+                            .iter()
+                            .map(|s| (s.path.clone(), s.values.clone()))
+                            .collect()
+                    })
+                    .unwrap_or_default()
             };
-            let rows_result = match linked {
-                Some((script, overrides)) => self.script_rows(Some(script), &overrides),
-                None => Ok(Vec::new()),
-            };
+            let rows_list: Vec<(String, Result<Vec<VarRow>, String>)> = linked
+                .into_iter()
+                .map(|(script, overrides)| {
+                    let rows = self.script_rows(Some(script.clone()), &overrides);
+                    (script, rows)
+                })
+                .collect();
             let scene: &mut Scene = match &mut self.play {
                 Some(p) => p.runtime.scene_mut(),
                 None => &mut self.scene,
@@ -705,209 +903,485 @@ impl EditorApp {
                 selection.and_then(|id| scene.entities.iter_mut().find(|e| e.id == id))
             else {
                 ui.label("nothing selected");
+                ui.separator();
+                ui.label("Scene music (loop on Play)");
+                ui.horizontal(|ui| {
+                    ui.text_edit_singleline(&mut self.scene_music_buf);
+                    if ui.button("Set").clicked() {
+                        let buf = self.scene_music_buf.clone();
+                        match self.set_scene_music(&buf) {
+                            Ok(()) => self.log(format!("music '{buf}'")),
+                            Err(e) => self.log(format!("error: {e}")),
+                        }
+                    }
+                    if ui.button("Clear").clicked() {
+                        self.scene.music = None;
+                        self.scene_music_buf.clear();
+                    }
+                });
+                if let Some(music) = &self.scene.music {
+                    ui.label(format!("playing: {music}"));
+                }
                 return;
             };
             ui.horizontal(|ui| {
                 ui.label("Name");
                 ui.text_edit_singleline(&mut entity.name);
             });
-            ui.label("Transform");
-            ui.horizontal(|ui| {
-                ui.label("pos");
-                ui.add(egui::DragValue::new(&mut entity.transform.position.x).speed(1.0));
-                ui.add(egui::DragValue::new(&mut entity.transform.position.y).speed(1.0));
-            });
-            ui.horizontal(|ui| {
-                ui.label("rot");
-                ui.add(egui::DragValue::new(&mut entity.transform.rotation_degrees).speed(1.0));
-            });
-            ui.horizontal(|ui| {
-                ui.label("scale");
-                ui.add(egui::DragValue::new(&mut entity.transform.scale.x).speed(0.1));
-                ui.add(egui::DragValue::new(&mut entity.transform.scale.y).speed(0.1));
-            });
-            if let Some(sprite) = &mut entity.sprite {
-                ui.label("Sprite");
+            let mut reset_transform = false;
+            if component_header(ui, ("transform", entity.id.0), "Transform", |ui| {
+                if ui.button("Reset").clicked() {
+                    reset_transform = true;
+                }
+            }) {
                 ui.horizontal(|ui| {
-                    ui.label("texture");
-                    ui.text_edit_singleline(&mut sprite.texture);
+                    ui.label("pos");
+                    ui.add(egui::DragValue::new(&mut entity.transform.position.x).speed(1.0));
+                    ui.add(egui::DragValue::new(&mut entity.transform.position.y).speed(1.0));
                 });
                 ui.horizontal(|ui| {
-                    ui.label("order");
-                    ui.add(egui::DragValue::new(&mut sprite.sorting_order));
+                    ui.label("rot");
+                    ui.add(egui::DragValue::new(&mut entity.transform.rotation_degrees).speed(1.0));
                 });
                 ui.horizontal(|ui| {
-                    ui.label("tint");
-                    for channel in &mut sprite.tint {
-                        ui.add(egui::DragValue::new(channel).speed(0.05).range(0.0..=1.0));
+                    ui.label("scale");
+                    ui.add(egui::DragValue::new(&mut entity.transform.scale.x).speed(0.1));
+                    ui.add(egui::DragValue::new(&mut entity.transform.scale.y).speed(0.1));
+                });
+            }
+            if reset_transform {
+                entity.transform.position = Vec2::zero();
+                entity.transform.rotation_degrees = 0.0;
+                entity.transform.scale = Vec2::new(1.0, 1.0);
+            }
+            if entity.sprite.is_some() {
+                let mut drop_it = false;
+                let mut reset_it = false;
+                if component_header(ui, ("sprite", entity.id.0), "Sprite", |ui| {
+                    if ui.button("Reset").clicked() {
+                        reset_it = true;
                     }
-                });
-            } else if ui.button("+ Sprite").clicked() {
-                entity.sprite = Some(SpriteRenderer {
-                    texture: String::new(),
-                    tint: [1.0, 1.0, 1.0, 1.0],
-                    sorting_order: 0,
-                });
+                    if ui.button("Remove").clicked() {
+                        drop_it = true;
+                    }
+                }) && let Some(sprite) = entity.sprite.as_mut()
+                {
+                    ui.horizontal(|ui| {
+                        ui.label("texture");
+                        ui.text_edit_singleline(&mut sprite.texture);
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label("order");
+                        ui.add(egui::DragValue::new(&mut sprite.sorting_order));
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label("tint");
+                        for channel in &mut sprite.tint {
+                            ui.add(egui::DragValue::new(channel).speed(0.05).range(0.0..=1.0));
+                        }
+                    });
+                }
+                if reset_it {
+                    entity.sprite = Some(SpriteRenderer {
+                        texture: String::new(),
+                        tint: [1.0, 1.0, 1.0, 1.0],
+                        sorting_order: 0,
+                    });
+                }
+                if drop_it {
+                    entity.sprite = None;
+                }
             }
-            if let Some(camera) = &mut entity.camera {
-                ui.label("Camera");
-                ui.horizontal(|ui| {
-                    ui.label("height");
-                    ui.add(
-                        egui::DragValue::new(&mut camera.height)
-                            .speed(0.5)
-                            .range(0.1..=1000.0),
-                    );
-                });
-            } else if ui.button("+ Camera").clicked() {
-                entity.camera = Some(Camera2D { height: 12.0 });
+            if entity.camera.is_some() {
+                let mut drop_it = false;
+                let mut reset_it = false;
+                if component_header(ui, ("camera", entity.id.0), "Camera", |ui| {
+                    if ui.button("Reset").clicked() {
+                        reset_it = true;
+                    }
+                    if ui.button("Remove").clicked() {
+                        drop_it = true;
+                    }
+                }) && let Some(camera) = entity.camera.as_mut()
+                {
+                    ui.horizontal(|ui| {
+                        ui.label("height");
+                        ui.add(
+                            egui::DragValue::new(&mut camera.height)
+                                .speed(0.5)
+                                .range(0.1..=1000.0),
+                        );
+                    });
+                }
+                if reset_it {
+                    entity.camera = Some(Camera2D { height: 12.0 });
+                }
+                if drop_it {
+                    entity.camera = None;
+                }
             }
-            if let Some(collider) = &mut entity.collider {
-                ui.label("Collider");
-                ui.horizontal(|ui| {
-                    ui.label("half");
-                    ui.add(
-                        egui::DragValue::new(&mut collider.hx)
-                            .speed(0.1)
-                            .range(0.01..=1000.0),
-                    );
-                    ui.add(
-                        egui::DragValue::new(&mut collider.hy)
-                            .speed(0.1)
-                            .range(0.01..=1000.0),
-                    );
-                });
-            } else if ui.button("+ Collider").clicked() {
-                entity.collider = Some(Collider2D {
-                    hx: 0.5,
-                    hy: 0.5,
-                    sensor: false,
-                });
+            if entity.collider.is_some() {
+                let mut drop_it = false;
+                let mut reset_it = false;
+                if component_header(ui, ("collider", entity.id.0), "Collider", |ui| {
+                    if ui.button("Reset").clicked() {
+                        reset_it = true;
+                    }
+                    if ui.button("Remove").clicked() {
+                        drop_it = true;
+                    }
+                }) && let Some(collider) = entity.collider.as_mut()
+                {
+                    ui.horizontal(|ui| {
+                        ui.label("half");
+                        ui.add(
+                            egui::DragValue::new(&mut collider.hx)
+                                .speed(0.1)
+                                .range(0.01..=1000.0),
+                        );
+                        ui.add(
+                            egui::DragValue::new(&mut collider.hy)
+                                .speed(0.1)
+                                .range(0.01..=1000.0),
+                        );
+                    });
+                }
+                if reset_it {
+                    entity.collider = Some(Collider2D {
+                        hx: 0.5,
+                        hy: 0.5,
+                        sensor: false,
+                    });
+                }
+                if drop_it {
+                    entity.collider = None;
+                }
             }
-            if let Some(body) = &mut entity.rigidbody {
-                ui.label("RigidBody");
-                ui.horizontal(|ui| {
-                    ui.label("kind");
-                    egui::ComboBox::from_label("")
-                        .selected_text(format!("{:?}", body.kind))
-                        .show_ui(ui, |ui| {
-                            ui.selectable_value(&mut body.kind, BodyKind::Static, "Static");
-                            ui.selectable_value(&mut body.kind, BodyKind::Dynamic, "Dynamic");
+            if entity.rigidbody.is_some() {
+                let mut drop_it = false;
+                let mut reset_it = false;
+                if component_header(ui, ("rigidbody", entity.id.0), "RigidBody", |ui| {
+                    if ui.button("Reset").clicked() {
+                        reset_it = true;
+                    }
+                    if ui.button("Remove").clicked() {
+                        drop_it = true;
+                    }
+                }) && let Some(body) = entity.rigidbody.as_mut()
+                {
+                    ui.horizontal(|ui| {
+                        ui.label("kind");
+                        egui::ComboBox::from_label("")
+                            .selected_text(format!("{:?}", body.kind))
+                            .show_ui(ui, |ui| {
+                                ui.selectable_value(&mut body.kind, BodyKind::Static, "Static");
+                                ui.selectable_value(&mut body.kind, BodyKind::Dynamic, "Dynamic");
+                            });
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label("vel");
+                        ui.add(egui::DragValue::new(&mut body.velocity.x).speed(0.5));
+                        ui.add(egui::DragValue::new(&mut body.velocity.y).speed(0.5));
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label("grav");
+                        ui.add(
+                            egui::DragValue::new(&mut body.gravity_scale)
+                                .speed(0.1)
+                                .range(0.0..=10.0),
+                        );
+                    });
+                }
+                if reset_it {
+                    entity.rigidbody = Some(RigidBody2D {
+                        kind: BodyKind::Dynamic,
+                        velocity: Vec2::zero(),
+                        gravity_scale: 1.0,
+                    });
+                }
+                if drop_it {
+                    entity.rigidbody = None;
+                }
+            }
+            if entity.anim.is_some() {
+                let mut drop_it = false;
+                let mut reset_it = false;
+                if component_header(ui, ("anim", entity.id.0), "Anim", |ui| {
+                    if ui.button("Reset").clicked() {
+                        reset_it = true;
+                    }
+                    if ui.button("Remove").clicked() {
+                        drop_it = true;
+                    }
+                }) && let Some(anim) = entity.anim.as_mut()
+                {
+                    ui.horizontal(|ui| {
+                        ui.label("clip");
+                        let current = anim.current.clone();
+                        egui::ComboBox::from_label("")
+                            .selected_text(current.clone())
+                            .show_ui(ui, |ui| {
+                                for clip in &anim.clips {
+                                    ui.selectable_value(
+                                        &mut anim.current,
+                                        clip.name.clone(),
+                                        clip.name.clone(),
+                                    );
+                                }
+                            });
+                    });
+                    if let Some(clip) = anim
+                        .clips
+                        .iter_mut()
+                        .find(|c| c.name == anim.current.clone())
+                    {
+                        ui.horizontal(|ui| {
+                            ui.label("fps");
+                            ui.add(
+                                egui::DragValue::new(&mut clip.fps)
+                                    .speed(0.5)
+                                    .range(0.0..=60.0),
+                            );
+                            ui.checkbox(&mut clip.looped, "loop");
                         });
-                });
-                ui.horizontal(|ui| {
-                    ui.label("vel");
-                    ui.add(egui::DragValue::new(&mut body.velocity.x).speed(0.5));
-                    ui.add(egui::DragValue::new(&mut body.velocity.y).speed(0.5));
-                });
-                ui.horizontal(|ui| {
-                    ui.label("grav");
-                    ui.add(
-                        egui::DragValue::new(&mut body.gravity_scale)
-                            .speed(0.1)
-                            .range(0.0..=10.0),
-                    );
-                });
-            } else if ui.button("+ RigidBody").clicked() {
-                entity.rigidbody = Some(RigidBody2D {
-                    kind: BodyKind::Dynamic,
-                    velocity: Vec2::zero(),
-                    gravity_scale: 1.0,
-                });
-            }
-            ui.label("Script");
-            if let Some(current) = entity.script.clone() {
-                ui.label(format!("linked: {current}"));
-            } else {
-                ui.label("linked: none");
+                        let mut drop_frame: Option<usize> = None;
+                        for (i, frame) in clip.frames.iter().enumerate() {
+                            ui.horizontal(|ui| {
+                                ui.label(format!("f{i}"));
+                                ui.label(frame.clone());
+                                if ui.button("x").clicked() {
+                                    drop_frame = Some(i);
+                                }
+                            });
+                        }
+                        if let Some(i) = drop_frame
+                            && i < clip.frames.len()
+                        {
+                            clip.frames.remove(i);
+                        }
+                        ui.horizontal(|ui| {
+                            ui.text_edit_singleline(&mut self.anim_frame_path)
+                                .on_hover_text("assets/frame.png");
+                            if ui.button("+ Frame").clicked() && !self.anim_frame_path.is_empty() {
+                                clip.frames.push(std::mem::take(&mut self.anim_frame_path));
+                            }
+                        });
+                    }
+                    ui.horizontal(|ui| {
+                        ui.text_edit_singleline(&mut self.anim_clip_name)
+                            .on_hover_text("clip name");
+                        if ui.button("+ Clip").clicked() && !self.anim_clip_name.is_empty() {
+                            let name = std::mem::take(&mut self.anim_clip_name);
+                            if !anim.clips.iter().any(|c| c.name == name) {
+                                anim.clips.push(ember_scene::AnimClip {
+                                    name: name.clone(),
+                                    frames: Vec::new(),
+                                    fps: 8.0,
+                                    looped: true,
+                                });
+                            }
+                            anim.current = name;
+                        }
+                        if ui.button("- Clip").clicked() {
+                            let cur = anim.current.clone();
+                            anim.clips.retain(|c| c.name != cur);
+                            anim.current = anim
+                                .clips
+                                .first()
+                                .map(|c| c.name.clone())
+                                .unwrap_or_default();
+                        }
+                    });
+                }
+                if reset_it {
+                    entity.anim = Some(ember_scene::SpriteAnim {
+                        clips: vec![ember_scene::AnimClip {
+                            name: "idle".to_string(),
+                            frames: Vec::new(),
+                            fps: 8.0,
+                            looped: false,
+                        }],
+                        current: "idle".to_string(),
+                        t: 0.0,
+                    });
+                }
+                if drop_it {
+                    entity.anim = None;
+                }
             }
             let mut note: Option<String> = None;
-            ui.horizontal(|ui| {
-                ui.text_edit_singleline(&mut self.script_buf);
-                if ui.button("Set").clicked() {
-                    let buf = self.script_buf.clone();
-                    match ember_project::validate_asset_path(&self.dir, &buf) {
-                        Ok(path) if buf.ends_with(".em") && path.is_file() => {
-                            entity.script = Some(buf.clone());
-                            self.script_buf = buf.clone();
-                            note = Some(format!("linked '{buf}'"));
+            let mut live: Vec<(EntityId, String, String, ScriptValue)> = Vec::new();
+            for (script, rows_result) in &rows_list {
+                let title = format!("{} (Script)", script_stem(script));
+                let mut drop_it = false;
+                if component_header(ui, (script.as_str(), entity.id.0), &title, |ui| {
+                    if ui.button("Unlink").clicked() {
+                        drop_it = true;
+                    }
+                }) {
+                    match rows_result {
+                        Ok(rows) => {
+                            let mut edits: HashMap<String, ScriptValue> = HashMap::new();
+                            let mut reverts: Vec<String> = Vec::new();
+                            for row in rows {
+                                ui.horizontal(|ui| {
+                                    ui.label(format!("{} ({})", row.name, row.ty));
+                                    let mut value = row.value.clone();
+                                    let changed = match &mut value {
+                                        ScriptValue::I32(v) => {
+                                            ui.add(egui::DragValue::new(v)).changed()
+                                        }
+                                        ScriptValue::F32(v) => {
+                                            ui.add(egui::DragValue::new(v).speed(0.1)).changed()
+                                        }
+                                        ScriptValue::Bool(v) => ui.checkbox(v, "").changed(),
+                                        ScriptValue::Str(v) => ui.text_edit_singleline(v).changed(),
+                                    };
+                                    if changed {
+                                        edits.insert(row.name.clone(), value);
+                                    }
+                                    if row.overridden && ui.button("Revert").clicked() {
+                                        reverts.push(row.name.clone());
+                                    }
+                                });
+                            }
+                            if let Some(entry) =
+                                entity.scripts.iter_mut().find(|s| s.path == *script)
+                            {
+                                for (name, value) in &edits {
+                                    entry.values.insert(name.clone(), value.clone());
+                                }
+                                for name in &reverts {
+                                    entry.values.remove(name);
+                                }
+                            }
+                            let live_rows: Vec<(String, ScriptValue)> = rows
+                                .iter()
+                                .map(|row| {
+                                    let value = if reverts.contains(&row.name) {
+                                        row.default.clone()
+                                    } else {
+                                        entity
+                                            .scripts
+                                            .iter()
+                                            .find(|s| s.path == *script)
+                                            .and_then(|s| s.values.get(&row.name).cloned())
+                                            .unwrap_or(row.value.clone())
+                                    };
+                                    (row.name.clone(), value)
+                                })
+                                .collect();
+                            let entity_id = entity.id;
+                            for (name, value) in live_rows {
+                                live.push((entity_id, script.clone(), name, value));
+                            }
                         }
-                        Ok(_) => {
-                            note = Some(format!(
-                                "error: script '{buf}' must be an existing .em file"
-                            ))
+                        Err(message) => {
+                            ui.label(format!("script: {message}"));
                         }
-                        Err(e) => note = Some(format!("error: {e}")),
                     }
                 }
-                if ui.button("Clear").clicked() {
-                    entity.script = None;
-                    note = Some("script cleared".to_string());
+                if drop_it {
+                    entity.scripts.retain(|s| s.path != *script);
+                }
+            }
+            ui.separator();
+            ui.vertical_centered(|ui| {
+                if ui.button("Add Component").clicked() {
+                    self.add_menu_open = !self.add_menu_open;
                 }
             });
-            match rows_result {
-                Ok(rows) => {
-                    let mut edits: HashMap<String, ScriptValue> = HashMap::new();
-                    let mut reverts: Vec<String> = Vec::new();
-                    for row in &rows {
-                        ui.horizontal(|ui| {
-                            ui.label(format!("{} ({})", row.name, row.ty));
-                            let mut value = row.value.clone();
-                            let changed = match &mut value {
-                                ScriptValue::I32(v) => ui.add(egui::DragValue::new(v)).changed(),
-                                ScriptValue::F32(v) => {
-                                    ui.add(egui::DragValue::new(v).speed(0.1)).changed()
-                                }
-                                ScriptValue::Bool(v) => ui.checkbox(v, "").changed(),
-                                ScriptValue::Str(v) => ui.text_edit_singleline(v).changed(),
-                            };
-                            if changed {
-                                edits.insert(row.name.clone(), value);
-                            }
-                            if row.overridden && ui.button("Revert").clicked() {
-                                reverts.push(row.name.clone());
-                            }
+            if self.add_menu_open {
+                let mut want_close = false;
+                ui.group(|ui| {
+                    ui.text_edit_singleline(&mut self.comp_search)
+                        .on_hover_text("filter");
+                    let query = self.comp_search.to_lowercase();
+                    let matches =
+                        |name: &str| query.is_empty() || name.to_lowercase().contains(&query);
+                    ui.label("Components");
+                    if entity.sprite.is_none() && matches("sprite") && ui.button("Sprite").clicked()
+                    {
+                        entity.sprite = Some(SpriteRenderer {
+                            texture: String::new(),
+                            tint: [1.0, 1.0, 1.0, 1.0],
+                            sorting_order: 0,
                         });
+                        want_close = true;
                     }
-                    for (name, value) in &edits {
-                        entity.script_values.insert(name.clone(), value.clone());
+                    if entity.camera.is_none() && matches("camera") && ui.button("Camera").clicked()
+                    {
+                        entity.camera = Some(Camera2D { height: 12.0 });
+                        want_close = true;
                     }
-                    for name in &reverts {
-                        entity.script_values.remove(name);
+                    if entity.collider.is_none()
+                        && matches("collider")
+                        && ui.button("Collider").clicked()
+                    {
+                        entity.collider = Some(Collider2D {
+                            hx: 0.5,
+                            hy: 0.5,
+                            sensor: false,
+                        });
+                        want_close = true;
                     }
-                    let live: Vec<(String, ScriptValue)> = rows
-                        .iter()
-                        .map(|row| {
-                            let value = if reverts.contains(&row.name) {
-                                row.default.clone()
-                            } else {
-                                entity
-                                    .script_values
-                                    .get(&row.name)
-                                    .cloned()
-                                    .unwrap_or(row.value.clone())
-                            };
-                            (row.name.clone(), value)
-                        })
-                        .collect();
-                    let entity_id = entity.id;
-                    if playing && let Some(play) = &mut self.play {
-                        for (name, value) in &live {
-                            let runtime_value = match value {
-                                ScriptValue::I32(v) => Value::I32(*v),
-                                ScriptValue::F32(v) => Value::F32(*v),
-                                ScriptValue::Bool(v) => Value::Bool(*v),
-                                ScriptValue::Str(v) => Value::Str(v.clone()),
-                            };
-                            if let Err(e) = play.runtime.set_global(entity_id, name, runtime_value)
-                            {
-                                note = Some(format!("error: {e}"));
-                            }
+                    if entity.rigidbody.is_none()
+                        && matches("rigidbody")
+                        && ui.button("RigidBody").clicked()
+                    {
+                        entity.rigidbody = Some(RigidBody2D {
+                            kind: BodyKind::Dynamic,
+                            velocity: Vec2::zero(),
+                            gravity_scale: 1.0,
+                        });
+                        want_close = true;
+                    }
+                    if entity.anim.is_none() && matches("anim") && ui.button("Anim").clicked() {
+                        entity.anim = Some(ember_scene::SpriteAnim {
+                            clips: vec![ember_scene::AnimClip {
+                                name: "idle".to_string(),
+                                frames: Vec::new(),
+                                fps: 8.0,
+                                looped: false,
+                            }],
+                            current: "idle".to_string(),
+                            t: 0.0,
+                        });
+                        want_close = true;
+                    }
+                    ui.separator();
+                    ui.label("Scripts");
+                    for script in self.scripts.clone() {
+                        if entity.scripts.iter().any(|s| s.path == script) || !matches(&script) {
+                            continue;
+                        }
+                        if ui.button(&script).clicked() {
+                            entity.scripts.push(ember_scene::ScriptEntry {
+                                path: script.clone(),
+                                values: HashMap::new(),
+                            });
+                            want_close = true;
                         }
                     }
+                });
+                if want_close {
+                    self.add_menu_open = false;
                 }
-                Err(message) => {
-                    ui.label(format!("script: {message}"));
+            }
+            if playing && let Some(play) = &mut self.play {
+                for (entity_id, file, name, value) in &live {
+                    let runtime_value = match value {
+                        ScriptValue::I32(v) => Value::I32(*v),
+                        ScriptValue::F32(v) => Value::F32(*v),
+                        ScriptValue::Bool(v) => Value::Bool(*v),
+                        ScriptValue::Str(v) => Value::Str(v.clone()),
+                    };
+                    if let Err(e) = play
+                        .runtime
+                        .set_global(*entity_id, file, name, runtime_value)
+                    {
+                        note = Some(format!("error: {e}"));
+                    }
                 }
             }
             if let Some(message) = note {
@@ -991,7 +1465,8 @@ impl EditorApp {
             let Some(tex) = self.tex else {
                 return;
             };
-            let (rect, resp) = ui.allocate_exact_size(avail, egui::Sense::click());
+            let (rect, resp) = ui.allocate_exact_size(avail, egui::Sense::click_and_drag());
+            let aspect = off.aspect();
             ui.painter().image(
                 tex,
                 rect,
@@ -1002,8 +1477,7 @@ impl EditorApp {
                 && let Some(pos) = resp.interact_pointer_pos()
             {
                 let local = (pos.x - rect.min.x, pos.y - rect.min.y);
-                let world =
-                    screen_to_world(local, (rect.width(), rect.height()), &camera, off.aspect());
+                let world = screen_to_world(local, (rect.width(), rect.height()), &camera, aspect);
                 let quads: Vec<[Vec2; 4]> = draws.iter().map(|d| d.corners).collect();
                 let mut order: Vec<(i32, EntityId)> = match &self.play {
                     Some(p) => p.runtime.scene(),
@@ -1018,8 +1492,36 @@ impl EditorApp {
                     && let Some(hit) = pick_top(&quads, world)
                     && let Some((_, id)) = order.get(hit)
                 {
-                    self.selection = Some(*id);
+                    let ctrl = ui.ctx().input(|i| i.modifiers.ctrl);
+                    if ctrl {
+                        self.toggle_select(*id);
+                    } else {
+                        self.select_only(*id);
+                    }
                 }
+            }
+            if resp.drag_started() && !self.selection.is_empty() && self.play.is_none() {
+                Self::push_undo(&mut self.undo, &mut self.redo, &self.scene);
+            }
+            if resp.dragged()
+                && !self.selection.is_empty()
+                && let Some(cur) = resp.interact_pointer_pos()
+            {
+                let size = (rect.width(), rect.height());
+                let prev = egui::pos2(cur.x - resp.drag_delta()[0], cur.y - resp.drag_delta()[1]);
+                let a = screen_to_world(
+                    (cur.x - rect.min.x, cur.y - rect.min.y),
+                    size,
+                    &camera,
+                    aspect,
+                );
+                let b = screen_to_world(
+                    (prev.x - rect.min.x, prev.y - rect.min.y),
+                    size,
+                    &camera,
+                    aspect,
+                );
+                self.move_selection(a.x - b.x, a.y - b.y);
             }
         });
     }
@@ -1091,6 +1593,20 @@ impl eframe::App for EditorApp {
             ui.ctx()
                 .send_viewport_cmd(egui::ViewportCommand::Title("Ember".to_string()));
             self.title_restore = false;
+        }
+        if self.play.is_none() {
+            let (undo_key, redo_key) = ui.ctx().input(|i| {
+                (
+                    i.key_pressed(egui::Key::Z) && i.modifiers.ctrl && !i.modifiers.shift,
+                    (i.key_pressed(egui::Key::Y) && i.modifiers.ctrl)
+                        || (i.key_pressed(egui::Key::Z) && i.modifiers.ctrl && i.modifiers.shift),
+                )
+            });
+            if undo_key {
+                self.undo();
+            } else if redo_key {
+                self.redo();
+            }
         }
         self.toolbar(ui);
         self.hierarchy(ui);
@@ -1265,6 +1781,88 @@ mod tests {
     }
 
     #[test]
+    fn undo_redo_add_entity() {
+        let (base, mut app) = test_app("undoadd");
+        let before = app.scene.save_to_string().unwrap();
+        EditorApp::push_undo(&mut app.undo, &mut app.redo, &app.scene);
+        let id = app.scene.spawn("Extra");
+        app.select_only(id);
+        assert!(app.scene.entities.iter().any(|e| e.id == id));
+        app.undo();
+        assert_eq!(app.scene.save_to_string().unwrap(), before);
+        assert!(app.selection.is_empty());
+        app.redo();
+        assert!(app.scene.entities.iter().any(|e| e.id == id));
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn move_selection_shifts_all() {
+        let (base, mut app) = test_app("undomove");
+        let a = app.scene.spawn("A");
+        let b = app.scene.spawn("B");
+        app.selection = vec![a, b];
+        EditorApp::push_undo(&mut app.undo, &mut app.redo, &app.scene);
+        app.move_selection(2.0, -1.0);
+        for id in [a, b] {
+            let e = app.scene.entities.iter().find(|e| e.id == id).unwrap();
+            assert_eq!(
+                (e.transform.position.x, e.transform.position.y),
+                (2.0, -1.0)
+            );
+        }
+        app.undo();
+        for id in [a, b] {
+            let e = app.scene.entities.iter().find(|e| e.id == id).unwrap();
+            assert_eq!((e.transform.position.x, e.transform.position.y), (0.0, 0.0));
+        }
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn delete_selection_undoable() {
+        let (base, mut app) = test_app("undodel");
+        let a = app.scene.spawn("A");
+        let b = app.scene.spawn("B");
+        app.selection = vec![a, b];
+        app.delete_selection();
+        assert!(!app.scene.entities.iter().any(|e| e.id == a));
+        assert!(app.selection.is_empty());
+        app.undo();
+        assert!(app.scene.entities.iter().any(|e| e.id == a));
+        assert!(app.scene.entities.iter().any(|e| e.id == b));
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn toggle_select_adds_and_removes() {
+        let (base, mut app) = test_app("togglesel");
+        let a = app.scene.spawn("A");
+        let b = app.scene.spawn("B");
+        app.select_only(a);
+        app.toggle_select(b);
+        assert_eq!(app.selection, vec![a, b]);
+        app.toggle_select(a);
+        assert_eq!(app.selection, vec![b]);
+        assert_eq!(app.primary(), Some(b));
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn scene_music_set_and_cleared() {
+        let (base, mut app) = test_app("scenemusic");
+        let dir = base.join("Game");
+        std::fs::write(dir.join("assets").join("m.ogg"), b"OggS....").unwrap();
+        assert!(app.set_scene_music("assets/m.ogg").is_ok());
+        assert_eq!(app.scene.music, Some("assets/m.ogg".to_string()));
+        assert!(app.set_scene_music("assets/nope.wav").is_err());
+        assert!(app.set_scene_music("assets/player.png").is_err());
+        assert!(app.set_scene_music("").is_ok());
+        assert!(app.scene.music.is_none());
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
     fn play_restart_rebuilds_runtime() {
         let (base, mut app) = test_app("restart");
         let dir = base.join("Game");
@@ -1382,8 +1980,14 @@ mod tests {
     fn rows_for(app: &mut EditorApp) -> Result<Vec<VarRow>, String> {
         let (script, overrides) = app
             .selection
+            .first()
+            .copied()
             .and_then(|id| app.scene.entities.iter().find(|e| e.id == id))
-            .and_then(|e| e.script.clone().map(|s| (s, e.script_values.clone())))
+            .and_then(|e| {
+                e.scripts
+                    .first()
+                    .map(|s| (s.path.clone(), s.values.clone()))
+            })
             .unwrap();
         app.script_rows(Some(script), &overrides)
     }
@@ -1398,7 +2002,7 @@ mod tests {
             .find(|e| e.name == "Player")
             .unwrap()
             .id;
-        app.selection = Some(id);
+        app.selection = vec![id];
         let rows = rows_for(&mut app).unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].name, "speed");
@@ -1422,9 +2026,13 @@ mod tests {
             .iter_mut()
             .find(|e| e.id == id)
             .unwrap()
-            .script_values
+            .scripts
+            .iter_mut()
+            .find(|s| s.path == "scripts/player.em")
+            .unwrap()
+            .values
             .insert("speed".to_string(), ScriptValue::F32(6.0));
-        app.selection = Some(id);
+        app.selection = vec![id];
         let rows = rows_for(&mut app).unwrap();
         assert_eq!(rows[0].value, ScriptValue::F32(6.0));
         assert!(rows[0].overridden);
@@ -1443,7 +2051,7 @@ mod tests {
             .find(|e| e.name == "Player")
             .unwrap()
             .id;
-        app.selection = Some(id);
+        app.selection = vec![id];
         assert!(rows_for(&mut app).is_err());
         let _ = std::fs::remove_dir_all(&base);
     }
@@ -1465,14 +2073,18 @@ mod tests {
             let entity = scene.entities.iter_mut().find(|e| e.id == id).unwrap();
             entity.transform.position.x = 9.0;
             entity
-                .script_values
+                .scripts
+                .iter_mut()
+                .find(|s| s.path == "scripts/player.em")
+                .unwrap()
+                .values
                 .insert("speed".to_string(), ScriptValue::F32(1.0));
         }
         app.play
             .as_mut()
             .unwrap()
             .runtime
-            .set_global(id, "speed", Value::F32(1.0))
+            .set_global(id, "scripts/player.em", "speed", Value::F32(1.0))
             .unwrap();
         assert_eq!(
             app.play.as_ref().unwrap().runtime.global(id, "speed"),
@@ -1482,7 +2094,7 @@ mod tests {
         assert!(!app.playing());
         let entity = app.scene.entities.iter().find(|e| e.id == id).unwrap();
         assert_eq!(entity.transform.position.x, 0.0);
-        assert!(entity.script_values.is_empty());
+        assert!(entity.scripts.iter().all(|s| s.values.is_empty()));
         let _ = std::fs::remove_dir_all(&base);
     }
 
