@@ -6,7 +6,9 @@ use eframe::egui::containers::{CentralPanel, Panel};
 use ember_core::{Ty, Vec2};
 use ember_renderer::{Camera, Offscreen, load_png_file, pick_top, scene_sprites};
 use ember_runtime::{InputState as GameInput, Runtime, ScriptDef};
-use ember_scene::{Camera2D, EntityId, Scene, ScriptValue, SpriteRenderer};
+use ember_scene::{
+    BodyKind, Camera2D, Collider2D, EntityId, RigidBody2D, Scene, ScriptValue, SpriteRenderer,
+};
 use ember_vm::{Host, Value, Vm};
 
 pub fn screen_to_world(click: (f32, f32), size: (f32, f32), camera: &Camera, aspect: f32) -> Vec2 {
@@ -42,11 +44,45 @@ pub struct EditorApp {
     new_name: String,
     rename: String,
     play: Option<PlayState>,
+    last_phys_sig: Vec<(u64, bool, bool, u8, u32, u32)>,
+}
+
+fn physics_sig(scene: &Scene) -> Vec<(u64, bool, bool, u8, u32, u32)> {
+    let mut sig: Vec<(u64, bool, bool, u8, u32, u32)> = scene
+        .entities
+        .iter()
+        .map(|e| {
+            let kind = match &e.rigidbody {
+                Some(b) => match b.kind {
+                    BodyKind::Static => 1,
+                    BodyKind::Dynamic => 2,
+                },
+                None => 0,
+            };
+            let (hx, hy) = match &e.collider {
+                Some(c) => (c.hx.to_bits(), c.hy.to_bits()),
+                None => (0, 0),
+            };
+            (
+                e.id.0,
+                e.collider.is_some(),
+                e.rigidbody.is_some(),
+                kind,
+                hx,
+                hy,
+            )
+        })
+        .collect();
+    sig.sort();
+    sig
 }
 
 struct PlayState {
     runtime: Runtime,
     last: std::time::Instant,
+    ticks: u64,
+    sim_t: f32,
+    last_dt: f32,
 }
 
 #[derive(Clone)]
@@ -125,6 +161,7 @@ impl EditorApp {
             new_name: "Entity".to_string(),
             rename: String::new(),
             play: None,
+            last_phys_sig: Vec::new(),
         };
         app.reload();
         app
@@ -166,7 +203,13 @@ impl EditorApp {
                 self.play = Some(PlayState {
                     runtime,
                     last: std::time::Instant::now(),
+                    ticks: 0,
+                    sim_t: 0.0,
+                    last_dt: 0.0,
                 });
+                if let Some(play) = &self.play {
+                    self.last_phys_sig = physics_sig(play.runtime.scene());
+                }
                 self.selection = None;
                 self.log("playing".to_string());
             }
@@ -181,7 +224,7 @@ impl EditorApp {
         }
     }
 
-    fn tick_play(&mut self, input: &GameInput) {
+    fn tick_play(&mut self, input: &GameInput, dt: f32) {
         enum Out {
             Logs(Vec<String>),
             Failed(String),
@@ -189,9 +232,10 @@ impl EditorApp {
         let out = match &mut self.play {
             None => return,
             Some(play) => {
-                let now = std::time::Instant::now();
-                let dt = now.duration_since(play.last).as_secs_f32().min(0.1);
-                play.last = now;
+                play.last = std::time::Instant::now();
+                play.ticks += 1;
+                play.sim_t += dt;
+                play.last_dt = dt;
                 let mut logs = Vec::new();
                 match play.runtime.tick(input, dt, &mut logs) {
                     Ok(()) => Out::Logs(logs),
@@ -330,7 +374,15 @@ impl EditorApp {
                         self.start_play();
                     }
                 } else {
-                    ui.label("PLAYING");
+                    if let Some(play) = &self.play {
+                        ui.label(format!(
+                            "PLAY t={:.1}s n={} dt={:.1}ms phys={}",
+                            play.sim_t,
+                            play.ticks,
+                            play.last_dt * 1000.0,
+                            play.runtime.physics_active()
+                        ));
+                    }
                     if ui.button("Stop").clicked() {
                         self.stop_play();
                     }
@@ -604,6 +656,55 @@ impl EditorApp {
             } else if ui.button("+ Camera").clicked() {
                 entity.camera = Some(Camera2D { height: 12.0 });
             }
+            if let Some(collider) = &mut entity.collider {
+                ui.label("Collider");
+                ui.horizontal(|ui| {
+                    ui.label("half");
+                    ui.add(
+                        egui::DragValue::new(&mut collider.hx)
+                            .speed(0.1)
+                            .range(0.01..=1000.0),
+                    );
+                    ui.add(
+                        egui::DragValue::new(&mut collider.hy)
+                            .speed(0.1)
+                            .range(0.01..=1000.0),
+                    );
+                });
+            } else if ui.button("+ Collider").clicked() {
+                entity.collider = Some(Collider2D { hx: 0.5, hy: 0.5 });
+            }
+            if let Some(body) = &mut entity.rigidbody {
+                ui.label("RigidBody");
+                ui.horizontal(|ui| {
+                    ui.label("kind");
+                    egui::ComboBox::from_label("")
+                        .selected_text(format!("{:?}", body.kind))
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(&mut body.kind, BodyKind::Static, "Static");
+                            ui.selectable_value(&mut body.kind, BodyKind::Dynamic, "Dynamic");
+                        });
+                });
+                ui.horizontal(|ui| {
+                    ui.label("vel");
+                    ui.add(egui::DragValue::new(&mut body.velocity.x).speed(0.5));
+                    ui.add(egui::DragValue::new(&mut body.velocity.y).speed(0.5));
+                });
+                ui.horizontal(|ui| {
+                    ui.label("grav");
+                    ui.add(
+                        egui::DragValue::new(&mut body.gravity_scale)
+                            .speed(0.1)
+                            .range(0.0..=10.0),
+                    );
+                });
+            } else if ui.button("+ RigidBody").clicked() {
+                entity.rigidbody = Some(RigidBody2D {
+                    kind: BodyKind::Dynamic,
+                    velocity: Vec2::zero(),
+                    gravity_scale: 1.0,
+                });
+            }
             ui.label("Script");
             if let Some(current) = entity.script.clone() {
                 ui.label(format!("linked: {current}"));
@@ -841,7 +942,31 @@ impl eframe::App for EditorApp {
             if escape {
                 self.stop_play();
             } else {
-                self.tick_play(&input);
+                let sig = match &self.play {
+                    Some(p) => physics_sig(p.runtime.scene()),
+                    None => Vec::new(),
+                };
+                if sig != self.last_phys_sig {
+                    self.last_phys_sig = sig;
+                    let rebuilt = match &mut self.play {
+                        Some(play) => play.runtime.rebuild_physics(),
+                        None => Ok(()),
+                    };
+                    if let Err(message) = rebuilt {
+                        self.log(format!("error: {message}"));
+                        self.stop_play();
+                    }
+                }
+                let dt = match &mut self.play {
+                    Some(play) => {
+                        let now = std::time::Instant::now();
+                        let dt = now.duration_since(play.last).as_secs_f32().min(0.1);
+                        play.last = now;
+                        dt
+                    }
+                    None => 0.0,
+                };
+                self.tick_play(&input, dt);
             }
         }
         self.toolbar(ui);
@@ -946,7 +1071,7 @@ mod tests {
         let edit_before = app.scene.save_to_string().unwrap();
         let mut input = GameInput::new();
         input.press(3);
-        app.tick_play(&input);
+        app.tick_play(&input, 1.0 / 60.0);
         let (rx, _) = pos_of(app.play.as_ref().unwrap().runtime.scene(), "Player");
         assert!(rx > 0.0);
         assert_eq!(pos_of(&app.scene, "Player").0, 0.0);
@@ -978,7 +1103,7 @@ mod tests {
         .unwrap();
         app.start_play();
         assert!(app.playing());
-        app.tick_play(&GameInput::new());
+        app.tick_play(&GameInput::new(), 1.0 / 60.0);
         assert!(!app.playing());
         assert!(app.status.contains("division by zero"));
         let _ = std::fs::remove_dir_all(&base);
@@ -1156,6 +1281,58 @@ mod tests {
         let entity = app.scene.entities.iter().find(|e| e.id == id).unwrap();
         assert_eq!(entity.transform.position.x, 0.0);
         assert!(entity.script_values.is_empty());
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn play_runs_physics() {
+        use ember_scene::{BodyKind, Collider2D, RigidBody2D};
+        let (base, mut app) = script_app("playphys");
+        let id = app
+            .scene
+            .entities
+            .iter()
+            .find(|e| e.name == "Player")
+            .unwrap()
+            .id;
+        let entity = app.scene.entities.iter_mut().find(|e| e.id == id).unwrap();
+        entity.rigidbody = Some(RigidBody2D {
+            kind: BodyKind::Dynamic,
+            velocity: Vec2::zero(),
+            gravity_scale: 1.0,
+        });
+        entity.collider = Some(Collider2D { hx: 0.5, hy: 0.5 });
+        app.start_play();
+        assert!(app.playing());
+        for _ in 0..60 {
+            app.tick_play(&GameInput::new(), 1.0 / 60.0);
+        }
+        let runtime_y = app
+            .play
+            .as_ref()
+            .unwrap()
+            .runtime
+            .scene()
+            .entities
+            .iter()
+            .find(|e| e.id == id)
+            .unwrap()
+            .transform
+            .position
+            .y;
+        assert!(runtime_y < -1.0, "player did not fall: y = {runtime_y}");
+        app.stop_play();
+        assert_eq!(
+            app.scene
+                .entities
+                .iter()
+                .find(|e| e.id == id)
+                .unwrap()
+                .transform
+                .position
+                .y,
+            0.0
+        );
         let _ = std::fs::remove_dir_all(&base);
     }
 }

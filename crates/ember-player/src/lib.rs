@@ -24,8 +24,8 @@ pub struct GameDef {
 }
 
 pub fn load_game(dir: &Path) -> Result<GameDef, GameError> {
-    let loaded =
-        ember_project::load_project(dir).map_err(|e| GameError(format!("load project: {e}")))?;
+    let loaded = ember_project::load_project_opts(dir, false)
+        .map_err(|e| GameError(format!("load project: {e}")))?;
     let mut scripts = Vec::new();
     for entity in &loaded.scene.entities {
         let Some(script) = &entity.script else {
@@ -99,6 +99,33 @@ mod tests {
         assert_eq!(game.scripts.len(), 1);
         assert!(game.scripts[0].file.ends_with("player.embc"));
         cleanup(&dir);
+    }
+
+    #[test]
+    fn loads_without_script_sources() {
+        let dir = built_project("nosrc");
+        let packed = dir.parent().unwrap().join("packed");
+        for sub in ["scenes", "build", "assets"] {
+            let mut stack = vec![dir.join(sub)];
+            while let Some(top) = stack.pop() {
+                let rel = top.strip_prefix(&dir).unwrap();
+                std::fs::create_dir_all(packed.join(rel)).unwrap();
+                for entry in std::fs::read_dir(&top).unwrap() {
+                    let path = entry.unwrap().path();
+                    if path.is_dir() {
+                        stack.push(path);
+                    } else {
+                        std::fs::copy(&path, packed.join(path.strip_prefix(&dir).unwrap()))
+                            .unwrap();
+                    }
+                }
+            }
+        }
+        std::fs::copy(dir.join("ember.project"), packed.join("ember.project")).unwrap();
+        let game = load_game(&packed).unwrap();
+        assert_eq!(game.scripts.len(), 1);
+        cleanup(&dir);
+        let _ = std::fs::remove_dir_all(&packed);
     }
 
     #[test]

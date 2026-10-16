@@ -6,6 +6,7 @@ use ember_scene::{EntityId, Scene, ScriptValue};
 use ember_vm::{Host, RuntimeError, Value, Vm};
 
 use crate::input::InputState;
+use crate::physics::PhysicsWorld;
 
 pub struct ScriptDef {
     pub entity: EntityId,
@@ -55,6 +56,7 @@ struct Instance {
 pub struct Runtime {
     scene: Scene,
     instances: Vec<Instance>,
+    physics: Option<PhysicsWorld>,
 }
 
 impl Runtime {
@@ -119,7 +121,19 @@ impl Runtime {
         instances: Vec<Instance>,
         logs: &mut Vec<String>,
     ) -> Result<Self, SpawnError> {
-        let mut runtime = Self { scene, instances };
+        let physics =
+            if scene.entities.iter().any(|e| e.rigidbody.is_some()) {
+                Some(PhysicsWorld::build(&scene.entities).map_err(|message| {
+                    SpawnError::Compile(vec![lang_wrap(&scene.name, message)])
+                })?)
+            } else {
+                None
+            };
+        let mut runtime = Self {
+            scene,
+            instances,
+            physics,
+        };
         let idle = InputState::new();
         for i in 0..runtime.instances.len() {
             let entity = runtime.instances[i].entity;
@@ -163,6 +177,9 @@ impl Runtime {
         dt: f32,
         logs: &mut Vec<String>,
     ) -> Result<(), RuntimeError> {
+        if let Some(physics) = &mut self.physics {
+            physics.tick(&mut self.scene.entities, dt);
+        }
         for i in 0..self.instances.len() {
             if !self.instances[i].vm.has_function("on_update") {
                 continue;
@@ -181,8 +198,22 @@ impl Runtime {
         &self.scene
     }
 
+    pub fn physics_active(&self) -> bool {
+        self.physics.as_ref().is_some_and(PhysicsWorld::has_bodies)
+    }
+
     pub fn scene_mut(&mut self) -> &mut Scene {
         &mut self.scene
+    }
+
+    pub fn rebuild_physics(&mut self) -> Result<(), String> {
+        let physics = if self.scene.entities.iter().any(|e| e.rigidbody.is_some()) {
+            Some(PhysicsWorld::build(&self.scene.entities)?)
+        } else {
+            None
+        };
+        self.physics = physics;
+        Ok(())
     }
 
     pub fn set_global(&mut self, entity: EntityId, name: &str, value: Value) -> Result<(), String> {
@@ -410,5 +441,106 @@ mod tests {
         let (scene, id) = scene_with_player();
         let err = Runtime::load(scene, vec![def(id, "var x = \n")], &mut Vec::new()).unwrap_err();
         assert!(err.to_string().contains("player.em:1:"));
+    }
+
+    #[test]
+    fn physics_runs_inside_tick() {
+        use ember_scene::{BodyKind, Collider2D, RigidBody2D};
+        let mut scene = Scene::new("phys");
+        let ground = scene.spawn("Ground");
+        scene
+            .entities
+            .iter_mut()
+            .find(|e| e.id == ground)
+            .unwrap()
+            .transform
+            .position = ember_core::Vec2::new(0.0, -1.0);
+        let entity = scene.entities.iter_mut().find(|e| e.id == ground).unwrap();
+        entity.rigidbody = Some(RigidBody2D {
+            kind: BodyKind::Static,
+            velocity: ember_core::Vec2::zero(),
+            gravity_scale: 1.0,
+        });
+        entity.collider = Some(Collider2D { hx: 10.0, hy: 1.0 });
+        let cube = scene.spawn("Cube");
+        let entity = scene.entities.iter_mut().find(|e| e.id == cube).unwrap();
+        entity.transform.position = ember_core::Vec2::new(0.0, 5.0);
+        entity.rigidbody = Some(RigidBody2D {
+            kind: BodyKind::Dynamic,
+            velocity: ember_core::Vec2::zero(),
+            gravity_scale: 1.0,
+        });
+        entity.collider = Some(Collider2D { hx: 0.5, hy: 0.5 });
+        let mut rt = Runtime::load(scene, vec![], &mut Vec::new()).unwrap();
+        for _ in 0..180 {
+            rt.tick(&InputState::new(), 1.0 / 60.0, &mut Vec::new())
+                .unwrap();
+        }
+        let y = rt
+            .scene()
+            .entities
+            .iter()
+            .find(|e| e.name == "Cube")
+            .unwrap()
+            .transform
+            .position
+            .y;
+        assert!((y - 0.5).abs() < 0.05, "rest y = {y}");
+    }
+
+    #[test]
+    fn bad_collider_blocks_load() {
+        use ember_scene::{BodyKind, Collider2D, RigidBody2D};
+        let mut scene = Scene::new("bad");
+        let id = scene.spawn("Bad");
+        let entity = scene.entities.iter_mut().find(|e| e.id == id).unwrap();
+        entity.rigidbody = Some(RigidBody2D {
+            kind: BodyKind::Dynamic,
+            velocity: ember_core::Vec2::zero(),
+            gravity_scale: 1.0,
+        });
+        entity.collider = Some(Collider2D { hx: 0.0, hy: 1.0 });
+        let err = Runtime::load(scene, vec![], &mut Vec::new()).unwrap_err();
+        assert!(err.to_string().contains("must be positive"));
+    }
+
+    #[test]
+    fn rebuild_picks_up_new_bodies() {
+        use ember_scene::{BodyKind, Collider2D, RigidBody2D};
+        let mut scene = Scene::new("late");
+        let id = scene.spawn("Late");
+        let mut rt = Runtime::load(scene, vec![], &mut Vec::new()).unwrap();
+        for _ in 0..10 {
+            rt.tick(&InputState::new(), 1.0 / 60.0, &mut Vec::new())
+                .unwrap();
+        }
+        let entity = rt
+            .scene_mut()
+            .entities
+            .iter_mut()
+            .find(|e| e.id == id)
+            .unwrap();
+        entity.transform.position = ember_core::Vec2::new(0.0, 5.0);
+        entity.rigidbody = Some(RigidBody2D {
+            kind: BodyKind::Dynamic,
+            velocity: ember_core::Vec2::zero(),
+            gravity_scale: 1.0,
+        });
+        entity.collider = Some(Collider2D { hx: 0.5, hy: 0.5 });
+        rt.rebuild_physics().unwrap();
+        for _ in 0..60 {
+            rt.tick(&InputState::new(), 1.0 / 60.0, &mut Vec::new())
+                .unwrap();
+        }
+        let y = rt
+            .scene()
+            .entities
+            .iter()
+            .find(|e| e.id == id)
+            .unwrap()
+            .transform
+            .position
+            .y;
+        assert!(y < 4.0, "body did not fall after rebuild: y = {y}");
     }
 }

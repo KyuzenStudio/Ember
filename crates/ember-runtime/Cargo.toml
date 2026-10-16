@@ -8,3 +8,4 @@ ember-core = { path = "../ember-core" }
 ember-scene = { path = "../ember-scene" }
 ember-lang = { path = "../ember-lang" }
 ember-vm = { path = "../ember-vm" }
+rapier2d = { version = "0.36", default-features = false, features = ["dim2", "f32", "std"] }

@@ -50,6 +50,25 @@ pub struct Camera2D {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Collider2D {
+    pub hx: f32,
+    pub hy: f32,
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum BodyKind {
+    Static,
+    Dynamic,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct RigidBody2D {
+    pub kind: BodyKind,
+    pub velocity: Vec2,
+    pub gravity_scale: f32,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum ScriptValue {
     I32(i32),
     F32(f32),
@@ -68,6 +87,10 @@ pub struct Entity {
     pub script: Option<String>,
     #[serde(default)]
     pub script_values: std::collections::HashMap<String, ScriptValue>,
+    #[serde(default)]
+    pub collider: Option<Collider2D>,
+    #[serde(default)]
+    pub rigidbody: Option<RigidBody2D>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -97,6 +120,8 @@ impl Scene {
             camera: None,
             script: None,
             script_values: std::collections::HashMap::new(),
+            collider: None,
+            rigidbody: None,
         });
         id
     }
@@ -202,6 +227,26 @@ mod tests {
         let loaded = Scene::load_from_str(src, "old.ron").unwrap();
         assert!(loaded.entities[0].script.is_none());
         assert!(loaded.entities[0].script_values.is_empty());
+        assert!(loaded.entities[0].collider.is_none());
+        assert!(loaded.entities[0].rigidbody.is_none());
+    }
+
+    #[test]
+    fn physics_components_round_trip() {
+        let mut scene = Scene::new("phys");
+        let id = scene.spawn("Box");
+        let entity = scene.entities.iter_mut().find(|e| e.id == id).unwrap();
+        entity.collider = Some(Collider2D { hx: 0.5, hy: 0.5 });
+        entity.rigidbody = Some(RigidBody2D {
+            kind: BodyKind::Dynamic,
+            velocity: Vec2::new(1.0, 0.0),
+            gravity_scale: 0.0,
+        });
+        let loaded = Scene::load_from_str(&scene.save_to_string().unwrap(), "test").unwrap();
+        assert_eq!(loaded, scene);
+        let body = loaded.entities[0].rigidbody.as_ref().unwrap();
+        assert_eq!(body.kind, BodyKind::Dynamic);
+        assert_eq!(body.velocity, Vec2::new(1.0, 0.0));
     }
 
     #[test]

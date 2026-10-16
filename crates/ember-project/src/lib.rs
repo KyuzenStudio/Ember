@@ -164,6 +164,13 @@ pub fn create_project(dir: &Path, name: &str) -> Result<(), ProjectError> {
 }
 
 pub fn load_project(dir: &Path) -> Result<LoadedProject, ProjectError> {
+    load_project_opts(dir, true)
+}
+
+pub fn load_project_opts(
+    dir: &Path,
+    check_script_sources: bool,
+) -> Result<LoadedProject, ProjectError> {
     let file = dir.join(PROJECT_FILE_NAME);
     let src = std::fs::read_to_string(&file)
         .map_err(|e| ProjectError(format!("read '{}': {e}", file.display())))?;
@@ -188,7 +195,7 @@ pub fn load_project(dir: &Path) -> Result<LoadedProject, ProjectError> {
         if let Some(script) = &entity.script {
             let path = validate_asset_path(dir, script)
                 .map_err(|e| ProjectError(format!("entity '{}': {e}", entity.name)))?;
-            if !path.is_file() {
+            if check_script_sources && !path.is_file() {
                 return Err(ProjectError(format!(
                     "entity '{}': script '{}' not found",
                     entity.name, script

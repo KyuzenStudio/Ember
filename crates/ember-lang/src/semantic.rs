@@ -59,6 +59,20 @@ impl<'a> Ck<'a> {
         ));
     }
 
+    fn value_ty(&mut self, span: Span, name: &str) -> Option<Ty> {
+        match Ty::from_name(name) {
+            Some(Ty::Void) => {
+                self.err(span, "type 'void' cannot hold a value".to_string());
+                None
+            }
+            Some(t) => Some(t),
+            None => {
+                self.err(span, format!("unknown type '{name}'"));
+                None
+            }
+        }
+    }
+
     fn collect_globals(&mut self, program: &Program) {
         for item in &program.items {
             match item {
@@ -71,12 +85,11 @@ impl<'a> Ck<'a> {
                         self.err(g.span, format!("'{}' is already defined", g.name));
                         continue;
                     }
-                    match Ty::from_name(&g.ty.name) {
+                    match self.value_ty(g.ty.span, &g.ty.name) {
                         Some(t) => {
                             self.globals.insert(g.name.clone(), Sym::Var(t));
                         }
                         None => {
-                            self.err(g.ty.span, format!("unknown type '{}'", g.ty.name));
                             self.poisoned.insert(g.name.clone());
                         }
                     }
@@ -93,10 +106,9 @@ impl<'a> Ck<'a> {
                     let mut params = Vec::new();
                     let mut bad = false;
                     for p in &f.params {
-                        match Ty::from_name(&p.ty.name) {
+                        match self.value_ty(p.ty.span, &p.ty.name) {
                             Some(t) => params.push(t),
                             None => {
-                                self.err(p.ty.span, format!("unknown type '{}'", p.ty.name));
                                 bad = true;
                             }
                         }
@@ -144,7 +156,7 @@ impl<'a> Ck<'a> {
         }
         let mut scopes = vec![HashMap::new()];
         for p in &f.params {
-            if let Some(t) = Ty::from_name(&p.ty.name) {
+            if let Some(t) = self.value_ty(p.ty.span, &p.ty.name) {
                 if scopes[0].contains_key(&p.name) {
                     self.err(p.span, format!("'{}' is already defined", p.name));
                 } else {
@@ -166,10 +178,9 @@ impl<'a> Ck<'a> {
     fn stmt(&mut self, s: &Stmt, scopes: &mut Vec<HashMap<String, Sym>>) {
         match s {
             Stmt::Var(v) => {
-                let declared = match Ty::from_name(&v.ty.name) {
+                let declared = match self.value_ty(v.ty.span, &v.ty.name) {
                     Some(t) => t,
                     None => {
-                        self.err(v.ty.span, format!("unknown type '{}'", v.ty.name));
                         self.expr_ty(&v.init, scopes);
                         return;
                     }
@@ -503,6 +514,24 @@ mod tests {
         let errors = err("var x: Foo = 1\n");
         assert!(
             errors.iter().any(|e| e.contains("unknown type 'Foo'")),
+            "{errors:?}"
+        );
+    }
+
+    #[test]
+    fn void_var_rejected() {
+        let errors = err("var x: void = log(\"a\")\n");
+        assert!(
+            errors.iter().any(|e| e.contains("cannot hold a value")),
+            "{errors:?}"
+        );
+    }
+
+    #[test]
+    fn void_param_rejected() {
+        let errors = err("fn f(a: void) {\n}\n");
+        assert!(
+            errors.iter().any(|e| e.contains("cannot hold a value")),
             "{errors:?}"
         );
     }
