@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use eframe::egui;
@@ -23,13 +23,44 @@ pub struct EditorApp {
     scene_rel: String,
     selection: Option<EntityId>,
     status: String,
+    console: Vec<String>,
+    diag: Vec<String>,
+    scripts: Vec<String>,
+    diag_sel: Option<String>,
+    assets: Vec<String>,
+    import_src: String,
+    script_buf: String,
     off: Option<Offscreen>,
     tex: Option<egui::TextureId>,
     tex_size: (u32, u32),
     sizes: HashMap<String, (u32, u32)>,
-    textures_ready: bool,
+    missing: HashSet<String>,
+    frame: u64,
     new_name: String,
     rename: String,
+}
+
+fn log_line(log: &mut Vec<String>, line: String) {
+    log.push(line);
+    if log.len() > 500 {
+        log.drain(..log.len() - 500);
+    }
+}
+
+fn open_external(path: &Path) -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        std::process::Command::new("cmd")
+            .args(["/C", "start", "", &path.display().to_string()])
+            .spawn()
+            .map(|_| ())
+            .map_err(|e| format!("open '{}': {e}", path.display()))
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = path;
+        Err("open externally is only supported on Windows".to_string())
+    }
 }
 
 impl EditorApp {
@@ -41,16 +72,45 @@ impl EditorApp {
             scene_rel: ember_project::STARTUP_SCENE.to_string(),
             selection: None,
             status: String::new(),
+            console: Vec::new(),
+            diag: Vec::new(),
+            scripts: Vec::new(),
+            diag_sel: None,
+            assets: Vec::new(),
+            import_src: String::new(),
+            script_buf: String::new(),
             off: None,
             tex: None,
             tex_size: (0, 0),
             sizes: HashMap::new(),
-            textures_ready: false,
+            missing: HashSet::new(),
+            frame: 0,
             new_name: "Entity".to_string(),
             rename: String::new(),
         };
         app.reload();
         app
+    }
+
+    fn log(&mut self, line: String) {
+        self.status = line.clone();
+        log_line(&mut self.console, line);
+    }
+
+    fn refresh_lists(&mut self) {
+        self.scripts = ember_project::script_stems(&self.dir)
+            .unwrap_or_default()
+            .iter()
+            .map(|s| format!("scripts/{s}.em"))
+            .collect();
+        if self
+            .diag_sel
+            .as_ref()
+            .is_none_or(|s| !self.scripts.contains(s))
+        {
+            self.diag_sel = self.scripts.first().cloned();
+        }
+        self.assets = ember_project::list_assets(&self.dir).unwrap_or_default();
     }
 
     fn reload(&mut self) {
@@ -60,11 +120,11 @@ impl EditorApp {
                 self.scene_rel = loaded.project.startup_scene.clone();
                 self.scene = loaded.scene;
                 self.selection = None;
-                self.textures_ready = false;
-                self.status = format!("opened '{}'", self.project_name);
+                self.refresh_lists();
+                self.log(format!("opened '{}'", self.project_name));
             }
             Err(e) => {
-                self.status = format!("error: {e}");
+                self.log(format!("error: {e}"));
             }
         }
     }
@@ -72,27 +132,38 @@ impl EditorApp {
     fn save(&mut self) {
         let path = self.dir.join(&self.scene_rel);
         match self.scene.save_to_file(&path) {
-            Ok(()) => self.status = format!("saved '{}'", self.scene_rel),
-            Err(e) => self.status = format!("error: {e}"),
+            Ok(()) => {
+                self.log(format!("saved '{}'", self.scene_rel));
+                self.check_scripts();
+            }
+            Err(e) => self.log(format!("error: {e}")),
         }
     }
 
-    fn selected_mut(&mut self) -> Option<&mut ember_scene::Entity> {
-        let id = self.selection?;
-        self.scene.entities.iter_mut().find(|e| e.id == id)
+    fn check_scripts(&mut self) {
+        match ember_project::check_dir(&self.dir) {
+            Ok(report) => {
+                self.diag = report.errors.iter().map(|e| e.to_string()).collect();
+                if report.errors.is_empty() {
+                    self.log(format!("check ok: {} script(s)", report.checked));
+                } else {
+                    self.log(format!("check: {} error(s)", report.errors.len()));
+                }
+            }
+            Err(e) => self.log(format!("error: {e}")),
+        }
     }
 
     fn ensure_textures(
         scene: &Scene,
         dir: &Path,
         sizes: &mut HashMap<String, (u32, u32)>,
-        ready: &mut bool,
+        missing: &mut HashSet<String>,
+        retry_missing: bool,
         status: &mut String,
         off: &mut Offscreen,
-    ) {
-        if *ready {
-            return;
-        }
+    ) -> Vec<String> {
+        let mut events = Vec::new();
         for entity in &scene.entities {
             let Some(sprite) = &entity.sprite else {
                 continue;
@@ -100,17 +171,26 @@ impl EditorApp {
             if sizes.contains_key(&sprite.texture) {
                 continue;
             }
+            if missing.contains(&sprite.texture) && !retry_missing {
+                continue;
+            }
             match load_png_file(&dir.join(&sprite.texture)) {
                 Ok(img) => {
                     sizes.insert(sprite.texture.clone(), (img.width, img.height));
+                    missing.remove(&sprite.texture);
                     if let Err(e) = off.cache_texture(&sprite.texture, &img) {
                         *status = format!("error: {e}");
+                    } else {
+                        events.push(format!("loaded '{}'", sprite.texture));
                     }
                 }
-                Err(e) => *status = format!("error: {e}"),
+                Err(e) => {
+                    *status = format!("error: {e}");
+                    missing.insert(sprite.texture.clone());
+                }
             }
         }
-        *ready = true;
+        events
     }
 
     fn toolbar(&mut self, ui: &mut egui::Ui) {
@@ -145,6 +225,13 @@ impl EditorApp {
                 {
                     self.selection = Some(id);
                     self.rename = name;
+                    self.script_buf = self
+                        .scene
+                        .entities
+                        .iter()
+                        .find(|e| e.id == id)
+                        .and_then(|e| e.script.clone())
+                        .unwrap_or_default();
                 }
             }
             ui.separator();
@@ -164,14 +251,37 @@ impl EditorApp {
                 self.scene.entities.retain(|e| e.id != id);
                 self.selection = None;
             }
+            ui.separator();
+            ui.heading("Assets");
+            for name in &self.assets {
+                ui.label(format!("assets/{name}"));
+            }
+            ui.horizontal(|ui| {
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.import_src)
+                        .hint_text("PNG source path, absolute or from terminal dir"),
+                );
+                if ui.button("Import").clicked() {
+                    let src = PathBuf::from(self.import_src.clone());
+                    match ember_project::import_asset(&self.dir, &src) {
+                        Ok(rel) => {
+                            self.log(format!("imported '{rel}'"));
+                            self.assets = ember_project::list_assets(&self.dir).unwrap_or_default();
+                        }
+                        Err(e) => self.log(format!("error: {e}")),
+                    }
+                }
+            });
         });
     }
 
     fn inspector(&mut self, ui: &mut egui::Ui) {
         Panel::right("inspector").show(ui, |ui| {
             ui.heading("Inspector");
-            let mut sprite_added = false;
-            let Some(entity) = self.selected_mut() else {
+            let selection = self.selection;
+            let Some(entity) =
+                selection.and_then(|id| self.scene.entities.iter_mut().find(|e| e.id == id))
+            else {
                 ui.label("nothing selected");
                 return;
             };
@@ -216,7 +326,6 @@ impl EditorApp {
                     tint: [1.0, 1.0, 1.0, 1.0],
                     sorting_order: 0,
                 });
-                sprite_added = true;
             }
             if let Some(camera) = &mut entity.camera {
                 ui.label("Camera");
@@ -231,11 +340,38 @@ impl EditorApp {
             } else if ui.button("+ Camera").clicked() {
                 entity.camera = Some(Camera2D { height: 12.0 });
             }
-            if let Some(script) = &entity.script {
-                ui.label(format!("Script: {script}"));
+            ui.label("Script");
+            if let Some(current) = entity.script.clone() {
+                ui.label(format!("linked: {current}"));
+            } else {
+                ui.label("linked: none");
             }
-            if sprite_added {
-                self.textures_ready = false;
+            let mut note: Option<String> = None;
+            ui.horizontal(|ui| {
+                ui.text_edit_singleline(&mut self.script_buf);
+                if ui.button("Set").clicked() {
+                    let buf = self.script_buf.clone();
+                    match ember_project::validate_asset_path(&self.dir, &buf) {
+                        Ok(path) if buf.ends_with(".em") && path.is_file() => {
+                            entity.script = Some(buf.clone());
+                            self.script_buf = buf.clone();
+                            note = Some(format!("linked '{buf}'"));
+                        }
+                        Ok(_) => {
+                            note = Some(format!(
+                                "error: script '{buf}' must be an existing .em file"
+                            ))
+                        }
+                        Err(e) => note = Some(format!("error: {e}")),
+                    }
+                }
+                if ui.button("Clear").clicked() {
+                    entity.script = None;
+                    note = Some("script cleared".to_string());
+                }
+            });
+            if let Some(message) = note {
+                self.log(message);
             }
         });
     }
@@ -256,18 +392,37 @@ impl EditorApp {
                 self.off = Some(Offscreen::new(&rs.device, &rs.queue, w, h));
                 self.tex_size = (0, 0);
             }
+            let poll = self.frame.is_multiple_of(30);
+            if poll {
+                let listed = ember_project::list_assets(&self.dir).unwrap_or_default();
+                for name in &listed {
+                    if !self.assets.contains(name) {
+                        self.log(format!("detected 'assets/{name}'"));
+                    }
+                }
+                self.assets = listed;
+            }
+            let events = {
+                let Some(off) = &mut self.off else {
+                    return;
+                };
+                off.resize(w, h);
+                Self::ensure_textures(
+                    &self.scene,
+                    &self.dir,
+                    &mut self.sizes,
+                    &mut self.missing,
+                    poll,
+                    &mut self.status,
+                    off,
+                )
+            };
+            for event in events {
+                self.log(event);
+            }
             let Some(off) = &mut self.off else {
                 return;
             };
-            off.resize(w, h);
-            Self::ensure_textures(
-                &self.scene,
-                &self.dir,
-                &mut self.sizes,
-                &mut self.textures_ready,
-                &mut self.status,
-                off,
-            );
             let (camera, draws) = scene_sprites(&self.scene, &self.sizes);
             if let Err(e) = off.render(&camera, &draws) {
                 self.status = format!("error: {e}");
@@ -322,6 +477,7 @@ impl EditorApp {
 impl eframe::App for EditorApp {
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         ui.ctx().request_repaint();
+        self.frame = self.frame.wrapping_add(1);
         self.toolbar(ui);
         self.hierarchy(ui);
         self.inspector(ui);
@@ -334,7 +490,54 @@ impl eframe::App for EditorApp {
             });
         }
         let status = self.status.clone();
-        Panel::bottom("status").show(ui, |ui| {
+        Panel::bottom("diagnostics").show(ui, |ui| {
+            ui.horizontal_top(|ui| {
+                ui.vertical(|ui| {
+                    ui.horizontal(|ui| {
+                        ui.heading("Scripts");
+                        if ui.button("Check").clicked() {
+                            self.check_scripts();
+                            self.refresh_lists();
+                        }
+                    });
+                    for script in self.scripts.clone() {
+                        let selected = self.diag_sel.as_ref() == Some(&script);
+                        ui.horizontal(|ui| {
+                            if ui.selectable_label(selected, &script).clicked() {
+                                self.diag_sel = Some(script.clone());
+                            }
+                            if ui.button("Open").clicked() {
+                                let path = self.dir.join(&script);
+                                match open_external(&path) {
+                                    Ok(()) => self.log(format!("opened '{script}'")),
+                                    Err(e) => self.log(format!("error: {e}")),
+                                }
+                            }
+                        });
+                    }
+                    ui.heading("Diagnostics");
+                    if self.diag.is_empty() {
+                        ui.label("no errors");
+                    }
+                    for line in self.diag.clone() {
+                        ui.label(line);
+                    }
+                });
+                ui.separator();
+                ui.vertical(|ui| {
+                    ui.horizontal(|ui| {
+                        ui.heading("Console");
+                        if ui.button("Clear").clicked() {
+                            self.console.clear();
+                        }
+                    });
+                    egui::ScrollArea::vertical().show(ui, |ui| {
+                        for line in self.console.clone() {
+                            ui.label(line);
+                        }
+                    });
+                });
+            });
             ui.label(status);
         });
     }
@@ -344,6 +547,16 @@ impl eframe::App for EditorApp {
 mod tests {
     use super::*;
     use ember_renderer::sprite_quad;
+
+    #[test]
+    fn console_caps_lines() {
+        let mut log = Vec::new();
+        for i in 0..600 {
+            log_line(&mut log, format!("{i}"));
+        }
+        assert_eq!(log.len(), 500);
+        assert_eq!(log[0], "100");
+    }
 
     #[test]
     fn screen_center_maps_to_camera_center() {

@@ -273,6 +273,60 @@ pub fn script_stems(dir: &Path) -> Result<Vec<String>, ProjectError> {
     Ok(names)
 }
 
+const PNG_MAGIC: [u8; 8] = [137, 80, 78, 71, 13, 10, 26, 10];
+
+pub fn list_assets(dir: &Path) -> Result<Vec<String>, ProjectError> {
+    let assets = dir.join("assets");
+    let mut names: Vec<String> = Vec::new();
+    if assets.is_dir() {
+        let entries = std::fs::read_dir(&assets)
+            .map_err(|e| ProjectError(format!("read '{}': {e}", assets.display())))?;
+        for entry in entries {
+            let entry =
+                entry.map_err(|e| ProjectError(format!("read '{}': {e}", assets.display())))?;
+            let path = entry.path();
+            if path.is_file()
+                && let Some(name) = path.file_name().and_then(|s| s.to_str())
+            {
+                names.push(name.to_string());
+            }
+        }
+    }
+    names.sort();
+    Ok(names)
+}
+
+pub fn import_asset(dir: &Path, src: &Path) -> Result<String, ProjectError> {
+    if !src.is_file() {
+        return Err(ProjectError(format!(
+            "source '{}' not found",
+            src.display()
+        )));
+    }
+    let name = src
+        .file_name()
+        .and_then(|s| s.to_str())
+        .filter(|s| !s.is_empty() && *s != "." && *s != "..")
+        .ok_or_else(|| ProjectError(format!("bad asset name '{}'", src.display())))?;
+    if !name.to_lowercase().ends_with(".png") {
+        return Err(ProjectError(format!("asset '{name}' is not a PNG")));
+    }
+    let rel = format!("assets/{name}");
+    let dst = dir.join(&rel);
+    if let (Ok(src_c), Ok(dst_c)) = (src.canonicalize(), dst.canonicalize())
+        && src_c == dst_c
+    {
+        return Ok(rel);
+    }
+    let bytes =
+        std::fs::read(src).map_err(|e| ProjectError(format!("read '{}': {e}", src.display())))?;
+    if bytes.len() < PNG_MAGIC.len() || bytes[..PNG_MAGIC.len()] != PNG_MAGIC {
+        return Err(ProjectError(format!("asset '{name}' is not a PNG")));
+    }
+    write_file(&dst, &bytes)?;
+    Ok(rel)
+}
+
 fn copy_dir(src: &Path, dst: &Path) -> Result<(), ProjectError> {
     std::fs::create_dir_all(dst)
         .map_err(|e| ProjectError(format!("create '{}': {e}", dst.display())))?;
@@ -584,6 +638,66 @@ mod tests {
         std::fs::remove_file(dir.join(STARTER_SCRIPT)).unwrap();
         let err = load_project(&dir).unwrap_err();
         assert!(err.to_string().contains("not found"));
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn import_png_copies_file() {
+        let dir = fresh_dir("import");
+        create_project(&dir, "Imp").unwrap();
+        let rel = import_asset(&dir, Path::new("../../assets/sprite-demo.png")).unwrap();
+        assert_eq!(rel, "assets/sprite-demo.png");
+        assert!(dir.join(&rel).is_file());
+        let listed = list_assets(&dir).unwrap();
+        assert!(listed.contains(&"player.png".to_string()));
+        assert!(listed.contains(&"sprite-demo.png".to_string()));
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn import_rejects_non_png() {
+        let dir = fresh_dir("importbad");
+        create_project(&dir, "ImpBad").unwrap();
+        let fake = dir.join("note.txt");
+        std::fs::write(&fake, b"hello").unwrap();
+        let err = import_asset(&dir, &fake).unwrap_err();
+        assert!(err.to_string().contains("not a PNG"));
+        let fake_png = dir.join("fake.png");
+        std::fs::write(&fake_png, b"not png bytes").unwrap();
+        let err = import_asset(&dir, &fake_png).unwrap_err();
+        assert!(err.to_string().contains("not a PNG"));
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn import_missing_source() {
+        let dir = fresh_dir("importmissing");
+        create_project(&dir, "ImpMissing").unwrap();
+        let err = import_asset(&dir, Path::new("nope/gone.png")).unwrap_err();
+        assert!(err.to_string().contains("not found"));
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn import_overwrites() {
+        let dir = fresh_dir("importover");
+        create_project(&dir, "ImpOver").unwrap();
+        let rel = import_asset(&dir, Path::new("../../assets/sprite-demo.png")).unwrap();
+        let first = std::fs::read(dir.join(&rel)).unwrap();
+        std::fs::write(dir.join(&rel), b"changed").unwrap();
+        import_asset(&dir, Path::new("../../assets/sprite-demo.png")).unwrap();
+        assert_eq!(std::fs::read(dir.join(&rel)).unwrap(), first);
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn import_same_file_is_noop() {
+        let dir = fresh_dir("importsame");
+        create_project(&dir, "ImpSame").unwrap();
+        let rel = import_asset(&dir, Path::new("../../assets/sprite-demo.png")).unwrap();
+        let same = dir.join(&rel).canonicalize().unwrap();
+        let again = import_asset(&dir, &same).unwrap();
+        assert_eq!(again, rel);
         cleanup(&dir);
     }
 
