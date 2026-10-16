@@ -140,6 +140,26 @@ impl Vm {
         &self.globals
     }
 
+    pub fn global_index(&self, name: &str) -> Option<usize> {
+        self.chunk.globals.iter().position(|g| g.name == name)
+    }
+
+    pub fn set_global(&mut self, idx: usize, value: Value) -> Result<(), RuntimeError> {
+        let want = self
+            .globals
+            .get(idx)
+            .map(|g| g.ty())
+            .ok_or_else(|| self.failure(ErrorKind::BadIndex("global".to_string())))?;
+        if value.ty() != want {
+            return Err(self.failure(ErrorKind::TypeMismatch {
+                want,
+                got: value.ty(),
+            }));
+        }
+        self.globals[idx] = value;
+        Ok(())
+    }
+
     pub fn has_function(&self, name: &str) -> bool {
         self.chunk.functions.iter().any(|f| f.name == name)
     }

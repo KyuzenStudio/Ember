@@ -50,6 +50,14 @@ pub struct Camera2D {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub enum ScriptValue {
+    I32(i32),
+    F32(f32),
+    Bool(bool),
+    Str(String),
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Entity {
     pub id: EntityId,
     pub name: String,
@@ -58,6 +66,8 @@ pub struct Entity {
     pub camera: Option<Camera2D>,
     #[serde(default)]
     pub script: Option<String>,
+    #[serde(default)]
+    pub script_values: std::collections::HashMap<String, ScriptValue>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -86,6 +96,7 @@ impl Scene {
             sprite: None,
             camera: None,
             script: None,
+            script_values: std::collections::HashMap::new(),
         });
         id
     }
@@ -164,6 +175,33 @@ mod tests {
             loaded.entities.iter().map(|e| e.id.0).collect::<Vec<_>>(),
             ids
         );
+    }
+
+    #[test]
+    fn script_values_round_trip() {
+        let mut scene = sample_scene();
+        let first = scene.entities[0].id;
+        let entity = scene.entities.iter_mut().find(|e| e.id == first).unwrap();
+        entity.script = Some("scripts/player.em".to_string());
+        entity
+            .script_values
+            .insert("speed".to_string(), ScriptValue::F32(6.0));
+        entity
+            .script_values
+            .insert("lives".to_string(), ScriptValue::I32(3));
+        let loaded = Scene::load_from_str(&scene.save_to_string().unwrap(), "test").unwrap();
+        assert_eq!(loaded, scene);
+    }
+
+    #[test]
+    fn old_scene_without_script_fields_loads() {
+        let src = "(format_version: 1, name: \"old\", entities: [(
+            id: (1), name: \"E\", transform: (position: (x: 0.0, y: 0.0),
+            rotation_degrees: 0.0, scale: (x: 1.0, y: 1.0)),
+            sprite: None, camera: None)])";
+        let loaded = Scene::load_from_str(src, "old.ron").unwrap();
+        assert!(loaded.entities[0].script.is_none());
+        assert!(loaded.entities[0].script_values.is_empty());
     }
 
     #[test]

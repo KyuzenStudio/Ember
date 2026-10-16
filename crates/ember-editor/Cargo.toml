@@ -9,7 +9,10 @@ path = "src/main.rs"
 
 [dependencies]
 eframe = "0.36"
+ember-core = { path = "../ember-core" }
 ember-scene = { path = "../ember-scene" }
 ember-project = { path = "../ember-project" }
 ember-renderer = { path = "../ember-renderer" }
-ember-core = { path = "../ember-core" }
+ember-runtime = { path = "../ember-runtime" }
+ember-lang = { path = "../ember-lang" }
+ember-vm = { path = "../ember-vm" }

@@ -3,9 +3,11 @@ use std::path::{Path, PathBuf};
 
 use eframe::egui;
 use eframe::egui::containers::{CentralPanel, Panel};
-use ember_core::Vec2;
+use ember_core::{Ty, Vec2};
 use ember_renderer::{Camera, Offscreen, load_png_file, pick_top, scene_sprites};
-use ember_scene::{Camera2D, EntityId, Scene, SpriteRenderer};
+use ember_runtime::{InputState as GameInput, Runtime, ScriptDef};
+use ember_scene::{Camera2D, EntityId, Scene, ScriptValue, SpriteRenderer};
+use ember_vm::{Host, Value, Vm};
 
 pub fn screen_to_world(click: (f32, f32), size: (f32, f32), camera: &Camera, aspect: f32) -> Vec2 {
     let half_h = camera.height / 2.0;
@@ -36,8 +38,42 @@ pub struct EditorApp {
     sizes: HashMap<String, (u32, u32)>,
     missing: HashSet<String>,
     frame: u64,
+    script_cache: HashMap<String, (std::time::SystemTime, Vec<CachedVar>)>,
     new_name: String,
     rename: String,
+    play: Option<PlayState>,
+}
+
+struct PlayState {
+    runtime: Runtime,
+    last: std::time::Instant,
+}
+
+#[derive(Clone)]
+struct CachedVar {
+    name: String,
+    ty: Ty,
+    default: ScriptValue,
+}
+
+struct VarRow {
+    name: String,
+    ty: Ty,
+    value: ScriptValue,
+    default: ScriptValue,
+    overridden: bool,
+}
+
+struct NoopHost;
+
+impl Host for NoopHost {
+    fn input_down(&mut self, _key: i32) -> bool {
+        false
+    }
+
+    fn transform_move(&mut self, _dx: f32, _dy: f32) {}
+
+    fn log(&mut self, _msg: &str) {}
 }
 
 fn log_line(log: &mut Vec<String>, line: String) {
@@ -85,11 +121,96 @@ impl EditorApp {
             sizes: HashMap::new(),
             missing: HashSet::new(),
             frame: 0,
+            script_cache: HashMap::new(),
             new_name: "Entity".to_string(),
             rename: String::new(),
+            play: None,
         };
         app.reload();
         app
+    }
+
+    pub fn playing(&self) -> bool {
+        self.play.is_some()
+    }
+
+    fn start_play(&mut self) {
+        if self.play.is_some() {
+            return;
+        }
+        let mut defs = Vec::new();
+        for entity in &self.scene.entities {
+            let Some(script) = &entity.script else {
+                continue;
+            };
+            let path = self.dir.join(script);
+            match std::fs::read_to_string(&path) {
+                Ok(source) => defs.push(ScriptDef {
+                    entity: entity.id,
+                    file: script.clone(),
+                    source,
+                    values: entity.script_values.clone(),
+                }),
+                Err(e) => {
+                    self.log(format!("error: read '{}': {e}", path.display()));
+                    return;
+                }
+            }
+        }
+        let mut logs = Vec::new();
+        match Runtime::load(self.scene.clone(), defs, &mut logs) {
+            Ok(runtime) => {
+                for line in logs {
+                    self.log(line);
+                }
+                self.play = Some(PlayState {
+                    runtime,
+                    last: std::time::Instant::now(),
+                });
+                self.selection = None;
+                self.log("playing".to_string());
+            }
+            Err(e) => self.log(format!("error: {e}")),
+        }
+    }
+
+    fn stop_play(&mut self) {
+        if self.play.take().is_some() {
+            self.selection = None;
+            self.log("stopped".to_string());
+        }
+    }
+
+    fn tick_play(&mut self, input: &GameInput) {
+        enum Out {
+            Logs(Vec<String>),
+            Failed(String),
+        }
+        let out = match &mut self.play {
+            None => return,
+            Some(play) => {
+                let now = std::time::Instant::now();
+                let dt = now.duration_since(play.last).as_secs_f32().min(0.1);
+                play.last = now;
+                let mut logs = Vec::new();
+                match play.runtime.tick(input, dt, &mut logs) {
+                    Ok(()) => Out::Logs(logs),
+                    Err(e) => Out::Failed(e.to_string()),
+                }
+            }
+        };
+        match out {
+            Out::Logs(logs) => {
+                for line in logs {
+                    self.log(line);
+                }
+            }
+            Out::Failed(message) => {
+                self.play = None;
+                self.selection = None;
+                self.log(format!("error: {message}"));
+            }
+        }
     }
 
     fn log(&mut self, line: String) {
@@ -114,6 +235,7 @@ impl EditorApp {
     }
 
     fn reload(&mut self) {
+        self.stop_play();
         match ember_project::load_project(&self.dir) {
             Ok(loaded) => {
                 self.project_name = loaded.project.name.clone();
@@ -203,6 +325,16 @@ impl EditorApp {
                 if ui.button("Reload").clicked() {
                     self.reload();
                 }
+                if !self.playing() {
+                    if ui.button("Play").clicked() {
+                        self.start_play();
+                    }
+                } else {
+                    ui.label("PLAYING");
+                    if ui.button("Stop").clicked() {
+                        self.stop_play();
+                    }
+                }
                 ui.label(&self.status);
             });
         });
@@ -211,12 +343,14 @@ impl EditorApp {
     fn hierarchy(&mut self, ui: &mut egui::Ui) {
         Panel::left("hierarchy").show(ui, |ui| {
             ui.heading("Hierarchy");
-            let ids: Vec<(EntityId, String)> = self
-                .scene
-                .entities
-                .iter()
-                .map(|e| (e.id, e.name.clone()))
-                .collect();
+            let ids: Vec<(EntityId, String)> = match &self.play {
+                Some(p) => p.runtime.scene(),
+                None => &self.scene,
+            }
+            .entities
+            .iter()
+            .map(|e| (e.id, e.name.clone()))
+            .collect();
             for (id, name) in ids {
                 let selected = self.selection == Some(id);
                 if ui
@@ -225,30 +359,46 @@ impl EditorApp {
                 {
                     self.selection = Some(id);
                     self.rename = name;
-                    self.script_buf = self
-                        .scene
-                        .entities
-                        .iter()
-                        .find(|e| e.id == id)
-                        .and_then(|e| e.script.clone())
-                        .unwrap_or_default();
+                    self.script_buf = match &self.play {
+                        Some(p) => p.runtime.scene(),
+                        None => &self.scene,
+                    }
+                    .entities
+                    .iter()
+                    .find(|e| e.id == id)
+                    .and_then(|e| e.script.clone())
+                    .unwrap_or_default();
                 }
             }
             ui.separator();
             ui.horizontal(|ui| {
                 ui.text_edit_singleline(&mut self.new_name);
                 if ui.button("+ Entity").clicked() && !self.new_name.is_empty() {
-                    let id = self.scene.spawn(&self.new_name.clone());
+                    let name = self.new_name.clone();
+                    let scene: &mut Scene = match &mut self.play {
+                        Some(p) => p.runtime.scene_mut(),
+                        None => &mut self.scene,
+                    };
+                    let id = scene.spawn(&name);
                     self.selection = Some(id);
                 }
             });
-            if self
-                .selection
-                .is_some_and(|id| self.scene.entities.iter().any(|e| e.id == id))
-                && ui.button("Delete").clicked()
+            if self.selection.is_some_and(|id| {
+                match &self.play {
+                    Some(p) => p.runtime.scene(),
+                    None => &self.scene,
+                }
+                .entities
+                .iter()
+                .any(|e| e.id == id)
+            }) && ui.button("Delete").clicked()
                 && let Some(id) = self.selection
             {
-                self.scene.entities.retain(|e| e.id != id);
+                let scene: &mut Scene = match &mut self.play {
+                    Some(p) => p.runtime.scene_mut(),
+                    None => &mut self.scene,
+                };
+                scene.entities.retain(|e| e.id != id);
                 self.selection = None;
             }
             ui.separator();
@@ -275,12 +425,126 @@ impl EditorApp {
         });
     }
 
+    fn script_globals(source: &str) -> Result<Vec<(String, Ty)>, String> {
+        let program = ember_lang::parse("script", source).map_err(|e| e.to_string())?;
+        let mut out = Vec::new();
+        for item in &program.items {
+            if let ember_lang::ast::Item::GlobalVar(g) = item
+                && let Some(ty) = Ty::from_name(&g.ty.name)
+                && matches!(ty, Ty::I32 | Ty::F32 | Ty::Bool | Ty::Str)
+            {
+                out.push((g.name.clone(), ty));
+            }
+        }
+        Ok(out)
+    }
+
+    fn script_defaults(file: &str, source: &str) -> Result<HashMap<String, ScriptValue>, String> {
+        let chunk = ember_lang::compile::compile(file, source).map_err(|es| {
+            es.iter()
+                .map(|e| e.to_string())
+                .collect::<Vec<_>>()
+                .join("; ")
+        })?;
+        let mut vm = Vm::new(chunk).map_err(|e| e.to_string())?;
+        let mut host = NoopHost;
+        vm.call(&mut host, "$init", vec![])
+            .map_err(|e| e.to_string())?;
+        let mut out = HashMap::new();
+        for (name, ty) in Self::script_globals(source)? {
+            let value = vm
+                .global_index(&name)
+                .and_then(|idx| vm.globals().get(idx).cloned())
+                .and_then(|v| match (v, ty) {
+                    (Value::I32(x), Ty::I32) => Some(ScriptValue::I32(x)),
+                    (Value::F32(x), Ty::F32) => Some(ScriptValue::F32(x)),
+                    (Value::Bool(x), Ty::Bool) => Some(ScriptValue::Bool(x)),
+                    (Value::Str(x), Ty::Str) => Some(ScriptValue::Str(x)),
+                    _ => None,
+                });
+            if let Some(value) = value {
+                out.insert(name, value);
+            }
+        }
+        Ok(out)
+    }
+
+    fn script_rows(
+        &mut self,
+        script: Option<String>,
+        overrides: &HashMap<String, ScriptValue>,
+    ) -> Result<Vec<VarRow>, String> {
+        let Some(script) = script else {
+            return Ok(Vec::new());
+        };
+        let path = self.dir.join(&script);
+        let mtime = std::fs::metadata(&path)
+            .and_then(|m| m.modified())
+            .map_err(|e| format!("read '{}': {e}", path.display()))?;
+        let cached = match self.script_cache.get(&script) {
+            Some((known, vars)) if *known == mtime => vars.clone(),
+            _ => {
+                let source = std::fs::read_to_string(&path)
+                    .map_err(|e| format!("read '{}': {e}", path.display()))?;
+                let globals = Self::script_globals(&source)?;
+                let defaults = Self::script_defaults(&script, &source)?;
+                let vars: Vec<CachedVar> = globals
+                    .into_iter()
+                    .filter_map(|(name, ty)| {
+                        defaults.get(&name).map(|default| CachedVar {
+                            name,
+                            ty,
+                            default: default.clone(),
+                        })
+                    })
+                    .collect();
+                self.script_cache
+                    .insert(script.clone(), (mtime, vars.clone()));
+                vars
+            }
+        };
+        Ok(cached
+            .into_iter()
+            .map(|v| {
+                let overridden = overrides.get(&v.name);
+                VarRow {
+                    value: overridden.cloned().unwrap_or(v.default.clone()),
+                    name: v.name,
+                    ty: v.ty,
+                    default: v.default,
+                    overridden: overridden.is_some(),
+                }
+            })
+            .collect())
+    }
+
     fn inspector(&mut self, ui: &mut egui::Ui) {
         Panel::right("inspector").show(ui, |ui| {
             ui.heading("Inspector");
+            let playing = self.play.is_some();
+            if playing {
+                ui.label("PLAYING — edits are temporary");
+            }
             let selection = self.selection;
+            let linked: Option<(String, HashMap<String, ScriptValue>)> = {
+                let scene: &Scene = match &self.play {
+                    Some(p) => p.runtime.scene(),
+                    None => &self.scene,
+                };
+                selection
+                    .and_then(|id| scene.entities.iter().find(|e| e.id == id))
+                    .and_then(|e| e.script.clone().map(|s| (s, e.script_values.clone())))
+            };
+            let rows_result = match linked {
+                Some((script, overrides)) => self.script_rows(Some(script), &overrides),
+                None => Ok(Vec::new()),
+            };
+            let scene: &mut Scene = match &mut self.play {
+                Some(p) => p.runtime.scene_mut(),
+                None => &mut self.scene,
+            };
             let Some(entity) =
-                selection.and_then(|id| self.scene.entities.iter_mut().find(|e| e.id == id))
+                selection.and_then(|id| scene.entities.iter_mut().find(|e| e.id == id))
             else {
                 ui.label("nothing selected");
                 return;
@@ -370,6 +634,71 @@ impl EditorApp {
                     note = Some("script cleared".to_string());
                 }
             });
+            match rows_result {
+                Ok(rows) => {
+                    let mut edits: HashMap<String, ScriptValue> = HashMap::new();
+                    let mut reverts: Vec<String> = Vec::new();
+                    for row in &rows {
+                        ui.horizontal(|ui| {
+                            ui.label(format!("{} ({})", row.name, row.ty));
+                            let mut value = row.value.clone();
+                            let changed = match &mut value {
+                                ScriptValue::I32(v) => ui.add(egui::DragValue::new(v)).changed(),
+                                ScriptValue::F32(v) => {
+                                    ui.add(egui::DragValue::new(v).speed(0.1)).changed()
+                                }
+                                ScriptValue::Bool(v) => ui.checkbox(v, "").changed(),
+                                ScriptValue::Str(v) => ui.text_edit_singleline(v).changed(),
+                            };
+                            if changed {
+                                edits.insert(row.name.clone(), value);
+                            }
+                            if row.overridden && ui.button("Revert").clicked() {
+                                reverts.push(row.name.clone());
+                            }
+                        });
+                    }
+                    for (name, value) in &edits {
+                        entity.script_values.insert(name.clone(), value.clone());
+                    }
+                    for name in &reverts {
+                        entity.script_values.remove(name);
+                    }
+                    let live: Vec<(String, ScriptValue)> = rows
+                        .iter()
+                        .map(|row| {
+                            let value = if reverts.contains(&row.name) {
+                                row.default.clone()
+                            } else {
+                                entity
+                                    .script_values
+                                    .get(&row.name)
+                                    .cloned()
+                                    .unwrap_or(row.value.clone())
+                            };
+                            (row.name.clone(), value)
+                        })
+                        .collect();
+                    let entity_id = entity.id;
+                    if playing && let Some(play) = &mut self.play {
+                        for (name, value) in &live {
+                            let runtime_value = match value {
+                                ScriptValue::I32(v) => Value::I32(*v),
+                                ScriptValue::F32(v) => Value::F32(*v),
+                                ScriptValue::Bool(v) => Value::Bool(*v),
+                                ScriptValue::Str(v) => Value::Str(v.clone()),
+                            };
+                            if let Err(e) = play.runtime.set_global(entity_id, name, runtime_value)
+                            {
+                                note = Some(format!("error: {e}"));
+                            }
+                        }
+                    }
+                }
+                Err(message) => {
+                    ui.label(format!("script: {message}"));
+                }
+            }
             if let Some(message) = note {
                 self.log(message);
             }
@@ -408,7 +737,10 @@ impl EditorApp {
                 };
                 off.resize(w, h);
                 Self::ensure_textures(
-                    &self.scene,
+                    match &self.play {
+                        Some(p) => p.runtime.scene(),
+                        None => &self.scene,
+                    },
                     &self.dir,
                     &mut self.sizes,
                     &mut self.missing,
@@ -423,7 +755,13 @@ impl EditorApp {
             let Some(off) = &mut self.off else {
                 return;
             };
-            let (camera, draws) = scene_sprites(&self.scene, &self.sizes);
+            let (camera, draws) = scene_sprites(
+                match &self.play {
+                    Some(p) => p.runtime.scene(),
+                    None => &self.scene,
+                },
+                &self.sizes,
+            );
             if let Err(e) = off.render(&camera, &draws) {
                 self.status = format!("error: {e}");
                 return;
@@ -456,12 +794,14 @@ impl EditorApp {
                 let world =
                     screen_to_world(local, (rect.width(), rect.height()), &camera, off.aspect());
                 let quads: Vec<[Vec2; 4]> = draws.iter().map(|d| d.corners).collect();
-                let mut order: Vec<(i32, EntityId)> = self
-                    .scene
-                    .entities
-                    .iter()
-                    .filter_map(|e| e.sprite.as_ref().map(|s| (s.sorting_order, e.id)))
-                    .collect();
+                let mut order: Vec<(i32, EntityId)> = match &self.play {
+                    Some(p) => p.runtime.scene(),
+                    None => &self.scene,
+                }
+                .entities
+                .iter()
+                .filter_map(|e| e.sprite.as_ref().map(|s| (s.sorting_order, e.id)))
+                .collect();
                 order.sort_by_key(|(seq, _)| *seq);
                 if order.len() == quads.len()
                     && let Some(hit) = pick_top(&quads, world)
@@ -478,6 +818,32 @@ impl eframe::App for EditorApp {
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         ui.ctx().request_repaint();
         self.frame = self.frame.wrapping_add(1);
+        if self.play.is_some() {
+            let mut input = GameInput::new();
+            ui.ctx().input(|i| {
+                if i.key_down(egui::Key::ArrowUp) {
+                    input.press(0);
+                }
+                if i.key_down(egui::Key::ArrowDown) {
+                    input.press(1);
+                }
+                if i.key_down(egui::Key::ArrowLeft) {
+                    input.press(2);
+                }
+                if i.key_down(egui::Key::ArrowRight) {
+                    input.press(3);
+                }
+                if i.key_down(egui::Key::Space) {
+                    input.press(4);
+                }
+            });
+            let escape = ui.ctx().input(|i| i.key_down(egui::Key::Escape));
+            if escape {
+                self.stop_play();
+            } else {
+                self.tick_play(&input);
+            }
+        }
         self.toolbar(ui);
         self.hierarchy(ui);
         self.inspector(ui);
@@ -558,6 +924,66 @@ mod tests {
         assert_eq!(log[0], "100");
     }
 
+    fn test_app(tag: &str) -> (PathBuf, EditorApp) {
+        let base = std::env::temp_dir().join(format!("ember-editor-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        ember_project::create_project(&base.join("Game"), "Game").unwrap();
+        let app = EditorApp::new(&base.join("Game"));
+        (base, app)
+    }
+
+    fn pos_of(scene: &Scene, name: &str) -> (f32, f32) {
+        let e = scene.entities.iter().find(|e| e.name == name).unwrap();
+        (e.transform.position.x, e.transform.position.y)
+    }
+
+    #[test]
+    fn play_runs_and_stop_preserves_edit() {
+        let (base, mut app) = test_app("play");
+        assert!(!app.playing());
+        app.start_play();
+        assert!(app.playing());
+        let edit_before = app.scene.save_to_string().unwrap();
+        let mut input = GameInput::new();
+        input.press(3);
+        app.tick_play(&input);
+        let (rx, _) = pos_of(app.play.as_ref().unwrap().runtime.scene(), "Player");
+        assert!(rx > 0.0);
+        assert_eq!(pos_of(&app.scene, "Player").0, 0.0);
+        app.stop_play();
+        assert!(!app.playing());
+        assert_eq!(app.scene.save_to_string().unwrap(), edit_before);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn play_broken_script_stays_edit() {
+        let (base, mut app) = test_app("broken");
+        let dir = base.join("Game");
+        std::fs::write(dir.join("scripts").join("player.em"), "var x = \n").unwrap();
+        app.start_play();
+        assert!(!app.playing());
+        assert!(app.status.contains("player.em:1:"));
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn tick_error_stops_play() {
+        let (base, mut app) = test_app("tickerr");
+        let dir = base.join("Game");
+        std::fs::write(
+            dir.join("scripts").join("player.em"),
+            "fn on_update(dt: f32) {\nvar x: i32 = 1 / 0\n}\n",
+        )
+        .unwrap();
+        app.start_play();
+        assert!(app.playing());
+        app.tick_play(&GameInput::new());
+        assert!(!app.playing());
+        assert!(app.status.contains("division by zero"));
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
     #[test]
     fn screen_center_maps_to_camera_center() {
         let cam = Camera {
@@ -615,5 +1041,121 @@ mod tests {
         order.sort_by_key(|(seq, _)| *seq);
         assert_eq!(order[0].1, front);
         assert_eq!(order[1].1, back);
+    }
+
+    fn script_app(tag: &str) -> (PathBuf, EditorApp) {
+        let base =
+            std::env::temp_dir().join(format!("ember-editor-vars-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        ember_project::create_project(&base.join("Game"), "Game").unwrap();
+        let app = EditorApp::new(&base.join("Game"));
+        (base, app)
+    }
+
+    fn rows_for(app: &mut EditorApp) -> Result<Vec<VarRow>, String> {
+        let (script, overrides) = app
+            .selection
+            .and_then(|id| app.scene.entities.iter().find(|e| e.id == id))
+            .and_then(|e| e.script.clone().map(|s| (s, e.script_values.clone())))
+            .unwrap();
+        app.script_rows(Some(script), &overrides)
+    }
+
+    #[test]
+    fn script_rows_show_defaults() {
+        let (base, mut app) = script_app("defaults");
+        let id = app
+            .scene
+            .entities
+            .iter()
+            .find(|e| e.name == "Player")
+            .unwrap()
+            .id;
+        app.selection = Some(id);
+        let rows = rows_for(&mut app).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].name, "speed");
+        assert_eq!(rows[0].value, ScriptValue::F32(6.0));
+        assert!(!rows[0].overridden);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn script_rows_show_override() {
+        let (base, mut app) = script_app("override");
+        let id = app
+            .scene
+            .entities
+            .iter()
+            .find(|e| e.name == "Player")
+            .unwrap()
+            .id;
+        app.scene
+            .entities
+            .iter_mut()
+            .find(|e| e.id == id)
+            .unwrap()
+            .script_values
+            .insert("speed".to_string(), ScriptValue::F32(6.0));
+        app.selection = Some(id);
+        let rows = rows_for(&mut app).unwrap();
+        assert_eq!(rows[0].value, ScriptValue::F32(6.0));
+        assert!(rows[0].overridden);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn script_rows_broken_script() {
+        let (base, mut app) = script_app("broken");
+        let dir = base.join("Game");
+        std::fs::write(dir.join("scripts").join("player.em"), "var x = \n").unwrap();
+        let id = app
+            .scene
+            .entities
+            .iter()
+            .find(|e| e.name == "Player")
+            .unwrap()
+            .id;
+        app.selection = Some(id);
+        assert!(rows_for(&mut app).is_err());
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn play_edits_revert_on_stop() {
+        let (base, mut app) = script_app("playedit");
+        app.start_play();
+        assert!(app.playing());
+        let id = app
+            .scene
+            .entities
+            .iter()
+            .find(|e| e.name == "Player")
+            .unwrap()
+            .id;
+        {
+            let scene = app.play.as_mut().unwrap().runtime.scene_mut();
+            let entity = scene.entities.iter_mut().find(|e| e.id == id).unwrap();
+            entity.transform.position.x = 9.0;
+            entity
+                .script_values
+                .insert("speed".to_string(), ScriptValue::F32(1.0));
+        }
+        app.play
+            .as_mut()
+            .unwrap()
+            .runtime
+            .set_global(id, "speed", Value::F32(1.0))
+            .unwrap();
+        assert_eq!(
+            app.play.as_ref().unwrap().runtime.global(id, "speed"),
+            Some(Value::F32(1.0))
+        );
+        app.stop_play();
+        assert!(!app.playing());
+        let entity = app.scene.entities.iter().find(|e| e.id == id).unwrap();
+        assert_eq!(entity.transform.position.x, 0.0);
+        assert!(entity.script_values.is_empty());
+        let _ = std::fs::remove_dir_all(&base);
     }
 }

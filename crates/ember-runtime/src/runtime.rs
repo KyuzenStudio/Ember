@@ -1,7 +1,8 @@
+use std::collections::HashMap;
 use std::fmt;
 
 use ember_lang::compile::compile;
-use ember_scene::{EntityId, Scene};
+use ember_scene::{EntityId, Scene, ScriptValue};
 use ember_vm::{Host, RuntimeError, Value, Vm};
 
 use crate::input::InputState;
@@ -10,6 +11,7 @@ pub struct ScriptDef {
     pub entity: EntityId,
     pub file: String,
     pub source: String,
+    pub values: HashMap<String, ScriptValue>,
 }
 
 #[derive(Debug)]
@@ -17,6 +19,7 @@ pub struct ChunkDef {
     pub entity: EntityId,
     pub file: String,
     pub chunk: ember_vm::Chunk,
+    pub values: HashMap<String, ScriptValue>,
 }
 
 #[derive(Debug)]
@@ -45,6 +48,7 @@ impl std::error::Error for SpawnError {}
 struct Instance {
     entity: EntityId,
     vm: Vm,
+    values: HashMap<String, ScriptValue>,
 }
 
 #[derive(Debug)]
@@ -64,7 +68,7 @@ impl Runtime {
         for def in &scripts {
             match compile(&def.file, &def.source) {
                 Ok(chunk) => match Vm::new(chunk) {
-                    Ok(vm) => built.push((def.entity, vm)),
+                    Ok(vm) => built.push((def.entity, vm, def.values.clone())),
                     Err(e) => compile_errors.push(lang_wrap(&def.file, e.to_string())),
                 },
                 Err(mut errors) => compile_errors.append(&mut errors),
@@ -77,7 +81,7 @@ impl Runtime {
             scene,
             built
                 .into_iter()
-                .map(|(entity, vm)| Instance { entity, vm })
+                .map(|(entity, vm, values)| Instance { entity, vm, values })
                 .collect(),
             logs,
         )
@@ -91,7 +95,7 @@ impl Runtime {
         let mut built = Vec::new();
         for def in chunks {
             match Vm::new(def.chunk) {
-                Ok(vm) => built.push((def.entity, vm)),
+                Ok(vm) => built.push((def.entity, vm, def.values)),
                 Err(e) => {
                     return Err(SpawnError::Compile(vec![lang_wrap(
                         &def.file,
@@ -104,7 +108,7 @@ impl Runtime {
             scene,
             built
                 .into_iter()
-                .map(|(entity, vm)| Instance { entity, vm })
+                .map(|(entity, vm, values)| Instance { entity, vm, values })
                 .collect(),
             logs,
         )
@@ -119,20 +123,36 @@ impl Runtime {
         let idle = InputState::new();
         for i in 0..runtime.instances.len() {
             let entity = runtime.instances[i].entity;
-            let mut host = CtxHost::new(&mut runtime.scene, entity, &idle);
-            if runtime.instances[i].vm.has_function("$init") {
-                runtime.instances[i]
-                    .vm
-                    .call(&mut host, "$init", vec![])
-                    .map_err(SpawnError::Runtime)?;
+            {
+                let mut host = CtxHost::new(&mut runtime.scene, entity, &idle);
+                if runtime.instances[i].vm.has_function("$init") {
+                    runtime.instances[i]
+                        .vm
+                        .call(&mut host, "$init", vec![])
+                        .map_err(SpawnError::Runtime)?;
+                }
+                logs.extend(host.take_logs());
             }
-            if runtime.instances[i].vm.has_function("on_create") {
-                runtime.instances[i]
-                    .vm
-                    .call(&mut host, "on_create", vec![])
-                    .map_err(SpawnError::Runtime)?;
+            {
+                let inst = &mut runtime.instances[i];
+                for (name, script_value) in &inst.values {
+                    if let Some(idx) = inst.vm.global_index(name) {
+                        inst.vm
+                            .set_global(idx, script_value_to_value(script_value))
+                            .map_err(SpawnError::Runtime)?;
+                    }
+                }
             }
-            logs.extend(host.take_logs());
+            {
+                let mut host = CtxHost::new(&mut runtime.scene, entity, &idle);
+                if runtime.instances[i].vm.has_function("on_create") {
+                    runtime.instances[i]
+                        .vm
+                        .call(&mut host, "on_create", vec![])
+                        .map_err(SpawnError::Runtime)?;
+                }
+                logs.extend(host.take_logs());
+            }
         }
         Ok(runtime)
     }
@@ -159,6 +179,42 @@ impl Runtime {
 
     pub fn scene(&self) -> &Scene {
         &self.scene
+    }
+
+    pub fn scene_mut(&mut self) -> &mut Scene {
+        &mut self.scene
+    }
+
+    pub fn set_global(&mut self, entity: EntityId, name: &str, value: Value) -> Result<(), String> {
+        let inst = self
+            .instances
+            .iter_mut()
+            .find(|i| i.entity == entity)
+            .ok_or_else(|| "entity has no running script".to_string())?;
+        let idx = inst
+            .vm
+            .global_index(name)
+            .ok_or_else(|| format!("no global '{name}'"))?;
+        inst.vm.set_global(idx, value).map_err(|e| e.to_string())
+    }
+
+    pub fn global(&self, entity: EntityId, name: &str) -> Option<Value> {
+        self.instances
+            .iter()
+            .find(|i| i.entity == entity)
+            .and_then(|i| {
+                i.vm.global_index(name)
+                    .and_then(|idx| i.vm.globals().get(idx).cloned())
+            })
+    }
+}
+
+fn script_value_to_value(value: &ScriptValue) -> Value {
+    match value {
+        ScriptValue::I32(v) => Value::I32(*v),
+        ScriptValue::F32(v) => Value::F32(*v),
+        ScriptValue::Bool(v) => Value::Bool(*v),
+        ScriptValue::Str(v) => Value::Str(v.clone()),
     }
 }
 
@@ -242,6 +298,7 @@ mod tests {
             entity,
             file: "player.em".to_string(),
             source: source.to_string(),
+            values: HashMap::new(),
         }
     }
 
@@ -327,6 +384,25 @@ mod tests {
         rt.tick(&InputState::new(), 1.0, &mut logs).unwrap();
         assert_eq!(pos(&rt, a), (1.0, 0.0));
         assert_eq!(pos(&rt, b), (1.0, 0.0));
+    }
+
+    #[test]
+    fn values_override_initializers() {
+        let (scene, id) = scene_with_player();
+        let mut script = def(
+            id,
+            "var speed: f32 = 1.0\nfn on_update(dt: f32) {\ntransform.move(speed * dt, 0.0)\n}\n",
+        );
+        script
+            .values
+            .insert("speed".to_string(), ScriptValue::F32(10.0));
+        script
+            .values
+            .insert("gone".to_string(), ScriptValue::I32(1));
+        let mut rt = Runtime::load(scene, vec![script], &mut Vec::new()).unwrap();
+        assert_eq!(rt.global(id, "speed"), Some(Value::F32(10.0)));
+        rt.tick(&InputState::new(), 0.5, &mut Vec::new()).unwrap();
+        assert_eq!(pos(&rt, id), (5.0, 0.0));
     }
 
     #[test]

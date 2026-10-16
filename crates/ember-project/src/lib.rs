@@ -11,7 +11,7 @@ pub const STARTER_SPRITE: &str = "assets/player.png";
 pub const STARTER_SCRIPT: &str = "scripts/player.em";
 
 const STARTER_PNG: &[u8] = include_bytes!("../../../assets/sprite-demo.png");
-const STARTER_SCRIPT_TEXT: &str = r#"var speed: f32 = 220.0
+const STARTER_SCRIPT_TEXT: &str = r#"var speed: f32 = 6.0
 
 fn on_create() {
     log("Player created")

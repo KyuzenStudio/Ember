@@ -927,9 +927,12 @@ version = "0.1.0"
 dependencies = [
  "eframe",
  "ember-core",
+ "ember-lang",
  "ember-project",
  "ember-renderer",
+ "ember-runtime",
  "ember-scene",
+ "ember-vm",
 ]
 
 [[package]]

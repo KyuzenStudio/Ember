@@ -52,6 +52,7 @@ pub fn load_game(dir: &Path) -> Result<GameDef, GameError> {
             entity: entity.id,
             file: rel,
             chunk,
+            values: entity.script_values.clone(),
         });
     }
     Ok(GameDef {
