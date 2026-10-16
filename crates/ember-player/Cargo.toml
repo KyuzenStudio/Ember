@@ -12,7 +12,6 @@ name = "ember_player"
 path = "src/lib.rs"
 
 [dependencies]
-ember-core = { path = "../ember-core" }
 ember-scene = { path = "../ember-scene" }
 ember-project = { path = "../ember-project" }
 ember-runtime = { path = "../ember-runtime" }

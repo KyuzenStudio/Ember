@@ -1,0 +1,15 @@
+[package]
+name = "ember-editor"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "ember-editor"
+path = "src/main.rs"
+
+[dependencies]
+eframe = "0.36"
+ember-scene = { path = "../ember-scene" }
+ember-project = { path = "../ember-project" }
+ember-renderer = { path = "../ember-renderer" }
+ember-core = { path = "../ember-core" }

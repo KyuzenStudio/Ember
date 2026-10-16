@@ -595,6 +595,67 @@ pub fn sprite_quad(center: Vec2, size: Vec2, rotation_degrees: f32) -> [Vec2; 4]
         .map(|(x, y)| Vec2::new(center.x + x * cos - y * sin, center.y + x * sin + y * cos))
 }
 
+pub fn scene_sprites(
+    scene: &ember_scene::Scene,
+    sizes: &std::collections::HashMap<String, (u32, u32)>,
+) -> (Camera, Vec<DrawReq>) {
+    let camera = scene
+        .entities
+        .iter()
+        .find_map(|e| {
+            e.camera.as_ref().map(|c| Camera {
+                center: e.transform.position,
+                height: c.height,
+            })
+        })
+        .unwrap_or(Camera {
+            center: Vec2::zero(),
+            height: 12.0,
+        });
+    let mut ordered: Vec<(i32, DrawReq)> = Vec::new();
+    for entity in &scene.entities {
+        let Some(sprite) = &entity.sprite else {
+            continue;
+        };
+        let Some((w, h)) = sizes.get(&sprite.texture).copied() else {
+            continue;
+        };
+        let aspect = w as f32 / h.max(1) as f32;
+        let size = Vec2::new(aspect * entity.transform.scale.x, entity.transform.scale.y);
+        let corners = sprite_quad(
+            entity.transform.position,
+            size,
+            entity.transform.rotation_degrees,
+        );
+        ordered.push((
+            sprite.sorting_order,
+            DrawReq {
+                texture: sprite.texture.clone(),
+                corners,
+                tint: sprite.tint,
+            },
+        ));
+    }
+    ordered.sort_by_key(|(order, _)| *order);
+    (camera, ordered.into_iter().map(|(_, d)| d).collect())
+}
+
+pub fn pick_top(quads: &[[Vec2; 4]], point: Vec2) -> Option<usize> {
+    quads.iter().rposition(|quad| {
+        let signs: Vec<f32> = quad
+            .iter()
+            .enumerate()
+            .map(|(i, corner)| {
+                let next = quad[(i + 1) % 4];
+                let edge = next - *corner;
+                let to_point = point - *corner;
+                edge.x * to_point.y - edge.y * to_point.x
+            })
+            .collect();
+        signs.iter().all(|s| *s >= 0.0) || signs.iter().all(|s| *s <= 0.0)
+    })
+}
+
 struct CachedTexture {
     key: String,
     width: u32,
@@ -692,71 +753,19 @@ impl SceneRenderer {
     }
 
     pub fn cache_texture(&mut self, key: &str, img: &DecodedImage) -> Result<(), GpuError> {
-        if self.textures.iter().any(|t| t.key == key) {
-            return Ok(());
-        }
-        if img.width == 0 || img.height == 0 {
-            return Err(GpuError(format!("texture '{key}' has zero size")));
-        }
-        let size = wgpu::Extent3d {
-            width: img.width,
-            height: img.height,
-            depth_or_array_layers: 1,
-        };
-        let texture = self.device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("sprite"),
-            size,
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8UnormSrgb,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-            view_formats: &[],
-        });
-        self.queue.write_texture(
-            wgpu::TexelCopyTextureInfo {
-                texture: &texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            &img.rgba,
-            wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(4 * img.width),
-                rows_per_image: Some(img.height),
-            },
-            size,
-        );
-        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("sprite bind group"),
-            layout: &self.layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::Sampler(&self.sampler),
-                },
-            ],
-        });
-        self.textures.push(CachedTexture {
-            key: key.to_string(),
-            width: img.width,
-            height: img.height,
-            bind_group,
-        });
-        Ok(())
+        upload_texture(
+            &self.device,
+            &self.queue,
+            &self.layout,
+            &self.sampler,
+            &mut self.textures,
+            key,
+            img,
+        )
     }
 
     pub fn texture_size(&self, key: &str) -> Option<(u32, u32)> {
-        self.textures
-            .iter()
-            .find(|t| t.key == key)
-            .map(|t| (t.width, t.height))
+        find_texture(&self.textures, key).map(|t| (t.width, t.height))
     }
 
     pub fn resize(&mut self, width: u32, height: u32) {
@@ -795,71 +804,335 @@ impl SceneRenderer {
             }
         };
         let aspect = self.aspect();
-        let uvs = [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]];
-        let mut verts = Vec::with_capacity(sprites.len() * 4);
-        for sprite in sprites {
-            let tex = self
-                .textures
-                .iter()
-                .find(|t| t.key == sprite.texture)
-                .ok_or_else(|| GpuError(format!("texture '{}' not cached", sprite.texture)))?;
-            let _ = tex;
-            for (i, corner) in sprite.corners.iter().enumerate() {
-                let p = camera.ndc(*corner, aspect);
-                verts.push(SpriteVertex {
-                    position: p,
-                    uv: uvs[i],
-                    color: sprite.tint,
-                });
-            }
-        }
+        let verts = build_verts(camera, aspect, &self.textures, sprites)?;
         self.queue
             .write_buffer(&self.vertex_buffer, 0, bytemuck::cast_slice(&verts));
         let view = frame
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
-        let mut encoder = self
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
-        {
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("scene pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &view,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color {
-                            r: 0.07,
-                            g: 0.07,
-                            b: 0.09,
-                            a: 1.0,
-                        }),
-                        store: wgpu::StoreOp::Store,
-                    },
-                    depth_slice: None,
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
-            pass.set_pipeline(&self.pipeline);
-            pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
-            pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
-            for (i, sprite) in sprites.iter().enumerate() {
-                let tex = self
-                    .textures
-                    .iter()
-                    .find(|t| t.key == sprite.texture)
-                    .ok_or_else(|| GpuError(format!("texture '{}' not cached", sprite.texture)))?;
-                pass.set_bind_group(0, &tex.bind_group, &[]);
-                let base = i as u32 * 6;
-                pass.draw_indexed(base..base + 6, 0, 0..1);
-            }
-        }
-        self.queue.submit([encoder.finish()]);
+        run_pass(&PassArgs {
+            device: &self.device,
+            queue: &self.queue,
+            pipeline: &self.pipeline,
+            vertex_buffer: &self.vertex_buffer,
+            index_buffer: &self.index_buffer,
+            textures: &self.textures,
+            view: &view,
+            sprites,
+        })?;
         self.queue.present(frame);
         Ok(())
+    }
+}
+
+fn find_texture<'a>(textures: &'a [CachedTexture], key: &str) -> Option<&'a CachedTexture> {
+    textures.iter().find(|t| t.key == key)
+}
+
+fn upload_texture(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    layout: &wgpu::BindGroupLayout,
+    sampler: &wgpu::Sampler,
+    textures: &mut Vec<CachedTexture>,
+    key: &str,
+    img: &DecodedImage,
+) -> Result<(), GpuError> {
+    if textures.iter().any(|t| t.key == key) {
+        return Ok(());
+    }
+    if img.width == 0 || img.height == 0 {
+        return Err(GpuError(format!("texture '{key}' has zero size")));
+    }
+    let size = wgpu::Extent3d {
+        width: img.width,
+        height: img.height,
+        depth_or_array_layers: 1,
+    };
+    let texture = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("sprite"),
+        size,
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba8UnormSrgb,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        view_formats: &[],
+    });
+    queue.write_texture(
+        wgpu::TexelCopyTextureInfo {
+            texture: &texture,
+            mip_level: 0,
+            origin: wgpu::Origin3d::ZERO,
+            aspect: wgpu::TextureAspect::All,
+        },
+        &img.rgba,
+        wgpu::TexelCopyBufferLayout {
+            offset: 0,
+            bytes_per_row: Some(4 * img.width),
+            rows_per_image: Some(img.height),
+        },
+        size,
+    );
+    let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+    let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("sprite bind group"),
+        layout,
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::TextureView(&view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: wgpu::BindingResource::Sampler(sampler),
+            },
+        ],
+    });
+    textures.push(CachedTexture {
+        key: key.to_string(),
+        width: img.width,
+        height: img.height,
+        bind_group,
+    });
+    Ok(())
+}
+
+fn build_verts(
+    camera: &Camera,
+    aspect: f32,
+    textures: &[CachedTexture],
+    sprites: &[DrawReq],
+) -> Result<Vec<SpriteVertex>, GpuError> {
+    let uvs = [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]];
+    let mut verts = Vec::with_capacity(sprites.len() * 4);
+    for sprite in sprites {
+        find_texture(textures, &sprite.texture)
+            .ok_or_else(|| GpuError(format!("texture '{}' not cached", sprite.texture)))?;
+        for (i, corner) in sprite.corners.iter().enumerate() {
+            let p = camera.ndc(*corner, aspect);
+            verts.push(SpriteVertex {
+                position: p,
+                uv: uvs[i],
+                color: sprite.tint,
+            });
+        }
+    }
+    Ok(verts)
+}
+
+struct PassArgs<'a> {
+    device: &'a wgpu::Device,
+    queue: &'a wgpu::Queue,
+    pipeline: &'a wgpu::RenderPipeline,
+    vertex_buffer: &'a wgpu::Buffer,
+    index_buffer: &'a wgpu::Buffer,
+    textures: &'a [CachedTexture],
+    view: &'a wgpu::TextureView,
+    sprites: &'a [DrawReq],
+}
+
+fn run_pass(args: &PassArgs) -> Result<(), GpuError> {
+    let PassArgs {
+        device,
+        queue,
+        pipeline,
+        vertex_buffer,
+        index_buffer,
+        textures,
+        view,
+        sprites,
+    } = args;
+    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+    {
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("scene pass"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color {
+                        r: 0.07,
+                        g: 0.07,
+                        b: 0.09,
+                        a: 1.0,
+                    }),
+                    store: wgpu::StoreOp::Store,
+                },
+                depth_slice: None,
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
+        pass.set_pipeline(pipeline);
+        pass.set_vertex_buffer(0, vertex_buffer.slice(..));
+        pass.set_index_buffer(index_buffer.slice(..), wgpu::IndexFormat::Uint16);
+        for (i, sprite) in sprites.iter().enumerate() {
+            let tex = find_texture(textures, &sprite.texture)
+                .ok_or_else(|| GpuError(format!("texture '{}' not cached", sprite.texture)))?;
+            pass.set_bind_group(0, &tex.bind_group, &[]);
+            let base = i as u32 * 6;
+            pass.draw_indexed(base..base + 6, 0, 0..1);
+        }
+    }
+    queue.submit([encoder.finish()]);
+    Ok(())
+}
+
+fn make_sampler(device: &wgpu::Device) -> wgpu::Sampler {
+    device.create_sampler(&wgpu::SamplerDescriptor {
+        mag_filter: wgpu::FilterMode::Linear,
+        min_filter: wgpu::FilterMode::Linear,
+        address_mode_u: wgpu::AddressMode::ClampToEdge,
+        address_mode_v: wgpu::AddressMode::ClampToEdge,
+        ..Default::default()
+    })
+}
+
+fn make_buffers(device: &wgpu::Device, queue: &wgpu::Queue) -> (wgpu::Buffer, wgpu::Buffer) {
+    let vertex_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("scene verts"),
+        size: (size_of::<SpriteVertex>() * MAX_SPRITES * 4) as u64,
+        usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+    let mut indices = Vec::with_capacity(MAX_SPRITES * 6);
+    for i in 0..MAX_SPRITES as u16 {
+        indices.extend_from_slice(&[i * 4, i * 4 + 1, i * 4 + 2, i * 4, i * 4 + 2, i * 4 + 3]);
+    }
+    let index_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("scene indices"),
+        size: (size_of::<u16>() * indices.len()) as u64,
+        usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+    queue.write_buffer(&index_buffer, 0, bytemuck::cast_slice(&indices));
+    (vertex_buffer, index_buffer)
+}
+
+pub struct Offscreen {
+    device: wgpu::Device,
+    queue: wgpu::Queue,
+    pipeline: wgpu::RenderPipeline,
+    layout: wgpu::BindGroupLayout,
+    sampler: wgpu::Sampler,
+    textures: Vec<CachedTexture>,
+    vertex_buffer: wgpu::Buffer,
+    index_buffer: wgpu::Buffer,
+    texture: wgpu::Texture,
+    view: wgpu::TextureView,
+    width: u32,
+    height: u32,
+    format: wgpu::TextureFormat,
+}
+
+impl Offscreen {
+    pub fn new(device: &wgpu::Device, queue: &wgpu::Queue, width: u32, height: u32) -> Self {
+        let format = wgpu::TextureFormat::Rgba8UnormSrgb;
+        let layout = sprite_bind_layout(device);
+        let pipeline = sprite_pipeline(device, &layout, format);
+        let sampler = make_sampler(device);
+        let (vertex_buffer, index_buffer) = make_buffers(device, queue);
+        let (w, h) = (width.max(1), height.max(1));
+        let texture = Self::make_target(device, format, w, h);
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        Self {
+            device: device.clone(),
+            queue: queue.clone(),
+            pipeline,
+            layout,
+            sampler,
+            textures: Vec::new(),
+            vertex_buffer,
+            index_buffer,
+            texture,
+            view,
+            width: w,
+            height: h,
+            format,
+        }
+    }
+
+    fn make_target(
+        device: &wgpu::Device,
+        format: wgpu::TextureFormat,
+        width: u32,
+        height: u32,
+    ) -> wgpu::Texture {
+        device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("editor viewport"),
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                | wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        })
+    }
+
+    pub fn resize(&mut self, width: u32, height: u32) {
+        let (w, h) = effective_size(width, height).unwrap_or((self.width, self.height));
+        if w == self.width && h == self.height {
+            return;
+        }
+        self.width = w;
+        self.height = h;
+        self.texture = Self::make_target(&self.device, self.format, w, h);
+        self.view = self
+            .texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
+    }
+
+    pub fn cache_texture(&mut self, key: &str, img: &DecodedImage) -> Result<(), GpuError> {
+        upload_texture(
+            &self.device,
+            &self.queue,
+            &self.layout,
+            &self.sampler,
+            &mut self.textures,
+            key,
+            img,
+        )
+    }
+
+    pub fn texture_size(&self, key: &str) -> Option<(u32, u32)> {
+        find_texture(&self.textures, key).map(|t| (t.width, t.height))
+    }
+
+    pub fn aspect(&self) -> f32 {
+        self.width as f32 / self.height.max(1) as f32
+    }
+
+    pub fn view(&self) -> &wgpu::TextureView {
+        &self.view
+    }
+
+    pub fn render(&mut self, camera: &Camera, sprites: &[DrawReq]) -> Result<(), GpuError> {
+        if sprites.len() > MAX_SPRITES {
+            return Err(GpuError(format!("too many sprites: {}", sprites.len())));
+        }
+        let verts = build_verts(camera, self.aspect(), &self.textures, sprites)?;
+        self.queue
+            .write_buffer(&self.vertex_buffer, 0, bytemuck::cast_slice(&verts));
+        run_pass(&PassArgs {
+            device: &self.device,
+            queue: &self.queue,
+            pipeline: &self.pipeline,
+            vertex_buffer: &self.vertex_buffer,
+            index_buffer: &self.index_buffer,
+            textures: &self.textures,
+            view: &self.view,
+            sprites,
+        })
     }
 }
 
@@ -1041,5 +1314,84 @@ mod tests {
     #[test]
     fn shader_parses() {
         naga::front::wgsl::parse_str(SHADER).expect("shader must parse");
+    }
+
+    #[test]
+    fn offscreen_renders_sprite() {
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+            compatible_surface: None,
+            ..Default::default()
+        }))
+        .expect("headless adapter");
+        let (device, queue) =
+            pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default()))
+                .expect("headless device");
+        let mut off = Offscreen::new(&device, &queue, 64, 64);
+        let bytes = include_bytes!("../../../assets/sprite-demo.png");
+        let img = decode_png(bytes).unwrap();
+        off.cache_texture("assets/player.png", &img).unwrap();
+        let mut scene = ember_scene::Scene::new("t");
+        let id = scene.spawn("Player");
+        scene
+            .entities
+            .iter_mut()
+            .find(|e| e.id == id)
+            .unwrap()
+            .sprite = Some(ember_scene::SpriteRenderer {
+            texture: "assets/player.png".to_string(),
+            tint: [1.0, 1.0, 1.0, 1.0],
+            sorting_order: 0,
+        });
+        let mut sizes = std::collections::HashMap::new();
+        sizes.insert("assets/player.png".to_string(), (img.width, img.height));
+        let (camera, draws) = scene_sprites(&scene, &sizes);
+        assert_eq!(draws.len(), 1);
+        off.render(&camera, &draws).unwrap();
+        let pixels = readback(&device, &queue, &off);
+        let center = &pixels[(32 * 64 + 32) * 4..][..4];
+        let corner = &pixels[0..4];
+        assert!(center[0] > 150, "center pixel dark: {center:?}");
+        assert_ne!(center, corner);
+    }
+
+    fn readback(device: &wgpu::Device, queue: &wgpu::Queue, off: &Offscreen) -> Vec<u8> {
+        let buf = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("readback"),
+            size: 64 * 64 * 4,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+        encoder.copy_texture_to_buffer(
+            wgpu::TexelCopyTextureInfo {
+                texture: &off.texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyBufferInfo {
+                buffer: &buf,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(64 * 4),
+                    rows_per_image: Some(64),
+                },
+            },
+            wgpu::Extent3d {
+                width: 64,
+                height: 64,
+                depth_or_array_layers: 1,
+            },
+        );
+        queue.submit([encoder.finish()]);
+        let slice = buf.slice(..);
+        let (tx, rx) = std::sync::mpsc::channel();
+        slice.map_async(wgpu::MapMode::Read, move |r| tx.send(r).unwrap());
+        device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+        rx.recv().unwrap().unwrap();
+        let data = slice.get_mapped_range().expect("mapped").to_vec();
+        buf.unmap();
+        data
     }
 }

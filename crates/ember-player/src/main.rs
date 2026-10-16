@@ -2,9 +2,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
 
-use ember_core::Vec2;
 use ember_player::load_game;
-use ember_renderer::{Camera, DrawReq, SceneRenderer, load_png_file, sprite_quad};
+use ember_renderer::{SceneRenderer, load_png_file};
 use ember_runtime::{InputState, Runtime};
 use winit::application::ApplicationHandler;
 use winit::dpi::LogicalSize;
@@ -68,46 +67,15 @@ impl App {
         for line in &logs {
             println!("{line}");
         }
-        let camera = runtime
-            .scene()
-            .entities
-            .iter()
-            .find_map(|e| {
-                e.camera.as_ref().map(|c| Camera {
-                    center: e.transform.position,
-                    height: c.height,
-                })
-            })
-            .unwrap_or(Camera {
-                center: Vec2::zero(),
-                height: 12.0,
-            });
-        let mut draws: Vec<(i32, DrawReq)> = Vec::new();
+        let mut sizes = std::collections::HashMap::new();
         for entity in &runtime.scene().entities {
-            let Some(sprite) = &entity.sprite else {
-                continue;
-            };
-            let Some((w, h)) = renderer.texture_size(&sprite.texture) else {
-                continue;
-            };
-            let aspect = w as f32 / h.max(1) as f32;
-            let size = Vec2::new(aspect * entity.transform.scale.x, entity.transform.scale.y);
-            let corners = sprite_quad(
-                entity.transform.position,
-                size,
-                entity.transform.rotation_degrees,
-            );
-            draws.push((
-                sprite.sorting_order,
-                DrawReq {
-                    texture: sprite.texture.clone(),
-                    corners,
-                    tint: sprite.tint,
-                },
-            ));
+            if let Some(sprite) = &entity.sprite
+                && let Some(size) = renderer.texture_size(&sprite.texture)
+            {
+                sizes.insert(sprite.texture.clone(), size);
+            }
         }
-        draws.sort_by_key(|(order, _)| *order);
-        let draws: Vec<DrawReq> = draws.into_iter().map(|(_, d)| d).collect();
+        let (camera, draws) = ember_renderer::scene_sprites(runtime.scene(), &sizes);
         if let Err(e) = renderer.draw(&camera, &draws) {
             self.error = Some(e.to_string());
             event_loop.exit();

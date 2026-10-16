@@ -5,6 +5,7 @@ edition.workspace = true
 
 [dependencies]
 ember-core = { path = "../ember-core" }
+ember-scene = { path = "../ember-scene" }
 wgpu = "30"
 winit = "0.30"
 image = { version = "0.25", default-features = false, features = ["png"] }
