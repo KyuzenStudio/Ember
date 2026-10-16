@@ -7,12 +7,14 @@ Uji: `cargo test -p ember-runtime --test perf_baseline` (menulis ulang bagian in
 
 | Metrik | Nilai |
 | --- | --- |
-| VM update (2000 tick, 1 skrip, loop 100) | 315.01 us/tick |
-| Fisika (600 tick, 50 body dinamis) | 764.71 us/tick |
-| Kompilasi skrip kecil (200x) | 47.9 us/kompilasi |
-| Draw count (200 sprite, CPU `scene_sprites`) | 200 draws, 128.1 us |
-| Frame GPU | 4.839 ms/frame (200 sprites, 800x600 offscreen) |
+| VM update (2000 tick, 1 skrip, loop 100) | 292.53 us/tick |
+| Fisika (600 tick, 50 body dinamis) | 715.88 us/tick |
+| Kompilasi skrip kecil (200x) | 46.1 us/kompilasi |
+| Draw count (200 sprite, CPU `scene_sprites`) | 200 draws, 133.2 us |
+| Frame GPU | 4.971 ms/frame (200 sprites, 800x600 offscreen) |
 <!-- /PERF:debug -->
+
+
 
 
 

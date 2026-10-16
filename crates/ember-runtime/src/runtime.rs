@@ -224,24 +224,33 @@ impl Runtime {
             destroyed.extend(host.take_destroyed());
         }
         if !destroyed.is_empty() {
-            self.scene.entities.retain(|e| !destroyed.contains(&e.id));
-            self.instances.retain(|i| !destroyed.contains(&i.entity));
-            if self.physics.is_some()
-                && let Ok(world) = PhysicsWorld::build(&self.scene.entities)
-            {
-                self.physics = Some(world);
-            }
+            self.apply_destroyed(&destroyed);
         }
+        let mut late_destroyed = Vec::new();
         for contact in contacts {
-            self.dispatch_contact(contact, logs)?;
+            self.dispatch_contact(contact, logs, &mut late_destroyed)?;
+        }
+        if !late_destroyed.is_empty() {
+            self.apply_destroyed(&late_destroyed);
         }
         Ok(())
+    }
+
+    fn apply_destroyed(&mut self, destroyed: &[EntityId]) {
+        self.scene.entities.retain(|e| !destroyed.contains(&e.id));
+        self.instances.retain(|i| !destroyed.contains(&i.entity));
+        if self.physics.is_some()
+            && let Ok(world) = PhysicsWorld::build(&self.scene.entities)
+        {
+            self.physics = Some(world);
+        }
     }
 
     fn dispatch_contact(
         &mut self,
         contact: crate::physics::Contact,
         logs: &mut Vec<String>,
+        destroyed: &mut Vec<EntityId>,
     ) -> Result<(), RuntimeError> {
         let lifecycle = if contact.begun {
             "on_collision_begin"
@@ -275,6 +284,15 @@ impl Runtime {
                 .vm
                 .call(&mut host, lifecycle, vec![Value::Str(other_name)])?;
             logs.extend(host.take_logs());
+            self.pending_audio.extend(host.take_audio());
+            self.pending_anim.extend(host.take_anim());
+            if let Some(title) = host.take_title() {
+                self.pending_title = Some(title);
+            }
+            if host.take_restart() {
+                self.restart_requested = true;
+            }
+            destroyed.extend(host.take_destroyed());
         }
         Ok(())
     }
