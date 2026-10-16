@@ -46,6 +46,9 @@ Pengguna awal juga mencakup pembuat Ember sendiri (dogfooding). Prioritas v0.1 a
 
 ## 5. Scope v0.1
 
+Bagian ini dipertahankan sebagai arsip. v0.1 dinyatakan selesai
+(`docs/VERIFICATION_REPORT_V01.md`). Isi di bawah tidak diubah.
+
 ### Termasuk
 
 - Cargo workspace dan CLI `ember` (`new`, `check`, `run`, `build`, `package`).
@@ -118,7 +121,7 @@ Output `ember package` v0.1 adalah player native Rust yang menjalankan bytecode 
 | Dependency (wgpu, winit, egui, Rapier) berubah atau bermasalah | Verifikasi versi, kompatibilitas, lisensi, dan pemeliharaan sebelum implementasi |
 | Klaim tes tidak sesuai kenyataan | Tes Windows hanya dilaporkan jika benar-benar dijalankan di Windows |
 
-## 10. Asumsi eksplisit
+## 10. Asumsi eksplisit (arsip v0.1, tidak diubah)
 
 Brief asli menyisakan beberapa hal terbuka. Dokumen ini memilih opsi paling sederhana yang mendukung workflow v0.1:
 
@@ -128,3 +131,58 @@ Brief asli menyisakan beberapa hal terbuka. Dokumen ini memilih opsi paling sede
 4. Collision/physics masuk v0.1 hanya jika milestone inti sebelumnya selesai dan stabil.
 5. Audio tidak masuk v0.1.
 6. Versi dependency tidak ditetapkan di dokumen ini dan harus diverifikasi saat implementasi.
+
+## 11. Scope v0.2 — "membuat game sungguhan"
+
+Tema: satu developer membuat satu platformer kecil yang lengkap (judul kerja:
+Coin Dash) memakai fitur v0.2, dari editor sampai paket Windows. Fitur masuk v0.2
+hanya jika game contoh membutuhkannya.
+
+### Termasuk
+
+- Utang v0.1: CI Windows, fuzz/corpus malformed untuk lexer/parser/verifier,
+  baseline performa (VM, renderer, fisika, waktu load).
+- Host API v2 bertipe (rincian + hasil review `DESIGN.md` §14): baca posisi entity,
+  teleport, hancurkan entity (terantre), `input.pressed` (edge), konversi eksplisit
+  yang lolos review (`str.of_i`, `str.cat`; `f32.of_i`/`i32.of_f`/`str.of_f` ditunda),
+  lifecycle `on_collision_begin/end`, audio play/loop/stop, ganti klip animasi,
+  ditambah usulan `game.restart` (kontrak menang/kalah) dan `game.set_title`
+  (opsi display, menunggu keputusan).
+- Event collision dari Rapier (begin/end, nama entity lawan) untuk koin, musuh,
+  dan pijakan.
+- Animasi sprite data-driven (rangkaian frame + fps + loop, tanpa array di script).
+- Audio dasar: SFX satu-tembak + musik loop (format WAV/Vorbis), sinkron ke
+  `ember package`.
+- Editor v2: geser entity di viewport, undo/redo, multi-select.
+- Game contoh non-trivial (Coin Dash): player lari/lompat, 3 koin, 1 musuh patroli,
+  skor, SFX + musik, animasi jalan, kamera ikut, kondisi menang.
+- Hardening v0.2: acceptance ulang, docs, verification report.
+
+### Tidak termasuk (non-goals v0.2)
+
+- Semua non-goals v0.1 tetap berlaku (native compiler/JIT/LLVM/Cranelift, 3D,
+  multiplayer, mobile, visual scripting, marketplace, GC, dynamic typing,
+  generics, closures, macros, async, reflection, modul kompleks).
+- UI teks dalam game (skor via `log`/Console saja).
+- Fisika lanjutan: sendi, raycast, CCD selektif, kecuali game contoh membutuhkannya.
+- Format audio selain WAV/Vorbis (MP3 opsional, diputuskan di M19).
+- Text editor kustom di dalam editor (tetap buka editor eksternal).
+- Hot reload production-ready; network; lokalisasi.
+
+## 12. Success criteria (acceptance criteria v0.2)
+
+Semua kosong sampai terbukti di verification report v0.2:
+
+- [ ] CI Windows hijau (build + test + clippy + fmt) tercatat.
+- [ ] Fuzz/corpus malformed tidak menjatuhkan lexer/parser/verifier.
+- [ ] Baseline performa tercatat (angka, bukan klaim).
+- [ ] Script membaca posisi entity lain dan memindahkan kamera mengikuti player.
+- [ ] `input.pressed` memicu lompat tepat sekali per tekan.
+- [ ] Koin hilang saat disentuh dan skor bertambah (event collision).
+- [ ] Musuh patroli mengurangi nyawa dan me-respawn player.
+- [ ] Animasi jalan berganti frame sesuai gerak; klip bisa diganti dari script.
+- [ ] SFX dan musik loop terdengar di Play editor dan di package.
+- [ ] `ember package` menyertakan aset audio; game paket bersuara tanpa source.
+- [ ] Drag entity di viewport, undo/redo, multi-select bekerja tanpa merusak scene.
+- [ ] Coin Dash selesai dimainkan dari awal sampai menang, dari editor dan dari package.
+- [ ] Tidak ada fitur bahasa di luar kebutuhan game contoh; larangan bahasa tetap utuh.

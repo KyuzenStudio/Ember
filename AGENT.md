@@ -47,8 +47,16 @@ Setiap milestone memiliki: tujuan, hasil yang dapat didemonstrasikan, tes, dan v
 | 10 | Editor: kerangka | Viewport, Hierarchy, Inspector, Toolbar; membuka/menyimpan project |
 | 11 | Editor: aset dan diagnostic | Asset Browser, impor gambar, Console, panel diagnostic, penautan script |
 | 12 | Play/Stop | Scene runtime terpisah; edit-time tidak berubah setelah Stop |
-| 13 | Collision dasar (opsional) | Hanya jika milestone 0–12 stabil; bila tidak, catat sebagai ditunda |
-| 14 | Hardening | Bug fixing, clean build, dokumentasi, test report, cek acceptance criteria |
+| 13 | Collision dasar (opsional) | Selesai di v0.1 (Rapier2D, HUD Play, fix akumulator) |
+| 14 | Hardening | Selesai di v0.1 (verification report, acceptance sinkron) |
+| 15 | Utang v0.1 | CI Windows hijau; fuzz/corpus malformed lexer/parser/verifier; baseline performa tercatat |
+| 16 | Host API v2 | API bertipe baru terdaftar satu tempat; demo baca entity lain, teleport, destroy terantre, `input.pressed` |
+| 17 | Bahasa v2 | Hanya yang dipicu game contoh; tiap fitur berjustifikasi + tes; versi format naik bila grammar/bytecode berubah |
+| 18 | Animasi sprite | Komponen `SpriteAnim` (klip, fps, loop); frame berganti di Play; ganti klip dari script |
+| 19 | Audio dasar | Crate `ember-audio` (rodio); SFX + musik loop WAV/Vorbis di Play dan package tanpa source |
+| 20 | Editor v2 | Drag di viewport; undo/redo; multi-select; tanpa merusak scene |
+| 21 | Game contoh non-trivial | Coin Dash selesai dimainkan awal–menang, dari editor dan dari package |
+| 22 | Hardening v0.2 | Bug fixing, acceptance ulang, docs, verification report v0.2 |
 
 Catatan urutan: pembuktian packaging (milestone 9) sengaja dilakukan sebelum editor agar risiko deployment muncul awal. Jika agent menemukan alasan kuat mengubah urutan, catat alasannya.
 
@@ -152,22 +160,41 @@ Sampai saat itu: tidak ada LLVM, Cranelift, JIT, atau transpiler C/C++ di reposi
 ## 7. Acceptance checklist v0.1
 
 Centang hanya dengan bukti (perintah, keluaran, atau demonstrasi di verification report).
+Status penutupan v0.1 (2026-10-16, `docs/VERIFICATION_REPORT_V01.md`):
 
-- [ ] Project baru dapat dibuat lewat CLI.
-- [ ] Editor dapat membuka, mengedit, menyimpan, dan membuka ulang scene.
-- [ ] Sprite dapat ditampilkan dan properti dasarnya diubah.
-- [ ] EmberScript statis dapat dikompilasi ke bytecode.
-- [ ] Verifier menolak bytecode malformed.
-- [ ] VM menjalankan control flow dan function call yang didukung.
-- [ ] Script dapat membaca input dan mengubah transform entity.
-- [ ] Syntax/type error menunjukkan lokasi sumber.
-- [ ] Play/Stop menggunakan scene runtime terpisah.
-- [ ] Sample game dapat dijalankan dari editor.
-- [ ] `ember check` bekerja tanpa membuka window.
-- [ ] `ember package` menghasilkan game Windows standalone.
-- [ ] Automated tests dan clean build memiliki hasil yang tercatat.
-- [ ] Dokumentasi menjelaskan setup, syntax, workflow, dan keterbatasan.
-- [ ] Tidak ada native compiler yang diselipkan ke v0.1.
+- [x] Project baru dapat dibuat lewat CLI. Bukti: tes `dispatch_new_creates_project`; demo `ember new CloseGame` → 5 file, exit 0.
+- [x] Editor dapat membuka, mengedit, menyimpan, dan membuka ulang scene. Bukti: tes round-trip Save/Reload; S8, S9 penguji.
+- [x] Sprite dapat ditampilkan dan properti dasarnya diubah. Bukti: tes readback piksel GPU; S8 penguji.
+- [x] EmberScript statis dapat dikompilasi ke bytecode. Bukti: tes `starter_compiles_and_verifies`; `ember build CloseGame` → `player.embc`.
+- [x] Verifier menolak bytecode malformed. Bukti: 15 kasus tes verifier.
+- [x] VM menjalankan control flow dan function call yang didukung. Bukti: tes while/call nested (36 tes ember-vm lulus).
+- [x] Script dapat membaca input dan mengubah transform entity. Bukti: tes runtime + Play S12 penguji (gerak 4 arah).
+- [x] Syntax/type error menunjukkan lokasi sumber. Bukti: tes `file:baris:kolom` parser/checker; S3, S11 penguji.
+- [x] Play/Stop menggunakan scene runtime terpisah. Bukti: tes RON identik sebelum/sesudah Stop; S12 penguji.
+- [x] Sample game dapat dijalankan dari editor. Bukti: Play windowed S12 penguji (gerak ikut speed baru).
+- [x] `ember check` bekerja tanpa membuka window. Bukti: `ember check CloseGame` → `ok: 1 script(s) checked`, tanpa window.
+- [x] `ember package` menghasilkan game Windows standalone. Bukti: `ember package CloseGame` → folder `CloseGame-windows-x86_64` (exe + `.embc` + aset + scene); exe windowed hidup 10 detik tanpa source, tanpa stderr, tanpa crash.
+- [x] Automated tests dan clean build memiliki hasil yang tercatat. Bukti: 196 tes lulus / 0 gagal dari target bersih; clippy `-D warnings` bersih; `fmt --check` lulus; `docs/VERIFICATION_REPORT_V01.md`.
+- [x] Dokumentasi menjelaskan setup, syntax, workflow, dan keterbatasan. Bukti: `README.md` + `docs/` (termasuk `KNOWN_LIMITATIONS.md`).
+- [x] Tidak ada native compiler yang diselipkan ke v0.1. Bukti: `cargo tree --locked` tanpa llvm/cranelift/jit.
+
+## 7b. Acceptance checklist v0.2 (kosong — belum dicentang)
+
+Centang hanya dengan bukti di verification report v0.2. Cerminan `PRODUCT.md` bagian 12:
+
+- [ ] CI Windows hijau (build + test + clippy + fmt) tercatat.
+- [ ] Fuzz/corpus malformed tidak menjatuhkan lexer/parser/verifier.
+- [ ] Baseline performa tercatat (angka, bukan klaim).
+- [ ] Script membaca posisi entity lain dan memindahkan kamera mengikuti player.
+- [ ] `input.pressed` memicu lompat tepat sekali per tekan.
+- [ ] Koin hilang saat disentuh dan skor bertambah (event collision).
+- [ ] Musuh patroli mengurangi nyawa dan me-respawn player.
+- [ ] Animasi jalan berganti frame sesuai gerak; klip bisa diganti dari script.
+- [ ] SFX dan musik loop terdengar di Play editor dan di package.
+- [ ] `ember package` menyertakan aset audio; game paket bersuara tanpa source.
+- [ ] Drag entity di viewport, undo/redo, multi-select bekerja tanpa merusak scene.
+- [ ] Coin Dash selesai dimainkan dari awal sampai menang, dari editor dan dari package.
+- [ ] Tidak ada fitur bahasa di luar kebutuhan game contoh; larangan bahasa tetap utuh.
 
 ## 8. Larangan ringkas
 

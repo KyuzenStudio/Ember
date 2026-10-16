@@ -1,6 +1,8 @@
 # DESIGN.md — Ember
 
-> Status dokumen: spesifikasi desain awal, bukan laporan status. Bentuk akhir boleh berubah berdasarkan bukti implementasi, selama perubahan dicatat dan tidak melanggar batas scope di `PRODUCT.md`.
+> Status dokumen: spesifikasi desain, bukan laporan status. Bagian 1–12 arsip v0.1
+> (tidak diubah). Bagian 13+ rancangan v0.2. Bentuk akhir boleh berubah berdasarkan
+> bukti implementasi, selama perubahan dicatat dan tidak melanggar batas scope di `PRODUCT.md`.
 
 ## 1. Stack
 
@@ -295,3 +297,155 @@ Script menggerakkan entity; error syntax/type menunjukkan lokasi; bytecode rusak
 ## 12. Dokumentasi yang dibutuhkan v0.1
 
 Setup, syntax EmberScript, daftar opcode, host API, workflow editor, format project/scene, dan keterbatasan yang diketahui.
+
+---
+
+# Rancangan v0.2 — "membuat game sungguhan"
+
+## 13. Game contoh: Coin Dash (penggerak semua fitur v0.2)
+
+Platformer satu level. Player lari/lompat; 3 koin (disentuh → skor+1, koin hilang);
+1 musuh patroli (disentuh → nyawa-1, player kembali ke start); skor tampil via log;
+SFX lompat/koin/kena + musik loop; animasi jalan 2 frame; kamera mengikuti player;
+menang saat semua koin diambil. Setiap fitur v0.2 di bawah merujuk kebutuhan ini;
+fitur tanpa rujukan tidak masuk.
+
+## 14. Host API v2
+
+Signature bertipe, didaftarkan di satu tempat seperti v0.1 (`ember-core/src/host.rs`,
+dipakai checker, compiler, VM). Hanya penambahan berikut, tiap baris terjustifikasi
+game contoh:
+
+| Path | Parameter | Return | Kebutuhan game contoh | Status |
+| --- | --- | --- | --- | --- |
+| `input.pressed` | `i32` | `bool` | lompat tepat sekali per tekan (edge, `down` tak cukup) | tetap |
+| `transform.x` | — | `f32` | batas patroli musuh, klem arena player | tetap |
+| `transform.y` | — | `f32` | deteksi jatuh ke jurang (batas bawah arena) | tetap |
+| `transform.set` | `f32, f32` | `void` | respawn player ke start | tetap |
+| `entity.x` | `string` (nama) | `f32` | kamera mengikuti player | tetap |
+| `entity.y` | `string` (nama) | `f32` | kamera mengikuti player (vertikal) | tetap |
+| `entity.destroy` | `string` (nama) | `void` | koin hilang; diterapkan terantre (langkah 5 urutan frame) | tetap |
+| `f32.of_i` | `i32` | `f32` | tidak ada use case jelas di Coin Dash | **ditunda** |
+| `i32.of_f` | `f32` | `i32` | tidak ada use case jelas di Coin Dash | **ditunda** |
+| `str.of_i` | `i32` | `string` | tampilkan skor via `log`/judul | tetap |
+| `str.of_f` | `f32` | `string` | tidak ada use case jelas di Coin Dash | **ditunda** |
+| `str.cat` | `string, string` | `string` | susun `"skor: " + angka` | tetap |
+| `audio.play` | `string` (path aset) | `void` | SFX lompat/koin/kena | tetap |
+| `audio.loop` | `string` (path aset) | `void` | musik latar | tetap |
+| `audio.stop` | — | `void` | hentikan musik saat menang/restart | tetap |
+| `anim.play` | `string` (nama klip) | `void` | ganti klip jalan/diam dari script | tetap |
+| `game.restart` | — | `void` | mulai ulang scene setelah menang/kalah (kontrak §21) | **tambah (usulan)** |
+| `game.set_title` | `string` | `void` | tampilkan skor/menang di judul window (opsi B §21, menunggu keputusan) | **tambah (usulan)** |
+
+Lifecycle baru: `on_collision_begin(other: string)` dan `on_collision_end(other: string)`,
+`other` = nama entity lawan. Filter (`other == "Coin"`) memakai `==` string yang
+sudah ada di v0.1.
+
+## 15. Bahasa v2 (delta dari v0.1)
+
+Kesimpulan audit: **tidak ada perubahan grammar** yang dibutuhkan game contoh.
+Array, `for`, `break`, string multi-baris, dan interpolasi string semuanya
+DITOLAK dengan alasan: entity game contoh berjumlah tetap di scene (tanpa koleksi),
+loop `while` + kondisi cukup untuk timer/patroli, dan penyusunan string dicover
+`str.cat`. Jika M21 membuktikan satu kebutuhan tak terpenuhi tanpa fitur bahasa,
+fitur itu diusulkan terpisah dengan justifikasi dan tes, bukan paket.
+
+Aturan versi tetap: perubahan grammar atau format bytecode menaikkan versi format
+dan wajib punya tes kompatibilitas/penolakan versi lama.
+
+## 16. Event collision
+
+Rapier2D sudah dipakai (M13). Desain: collider dinamis + sensor memakai
+`ActiveEvents::CONTACT_EVENTS`; runtime menguras contact events tiap tick setelah
+step, memetakan handle → nama entity, mengantrekan pasangan begin/end terurut
+dan terdedup, lalu memanggil lifecycle hanya pada script yang mendefinisikannya.
+Koin memakai collider sensor (tak mendorong player) → butuh flag `sensor` pada
+`Collider2D` (tambahan field opsional scene; aturan versi format berlaku).
+
+## 17. Animasi sprite
+
+Data-driven, tanpa array di script. Komponen scene baru `SpriteAnim`: daftar klip
+bernama, tiap klip = daftar path frame + fps + flag loop. Renderer memilih frame
+dari waktu sim; `anim.play` mengganti klip aktif. Klip default = sprite statis
+sekarang (kompatibel mundur). Preview klip di Inspector diputuskan di M20.
+
+## 18. Audio dasar
+
+Kebutuhan: SFX satu-tembak + satu musik loop, WAV/Vorbis, jalan di Play editor
+dan di package tanpa source. Kandidat ( diverifikasi 2026-10-16 via crates.io):
+
+| Kandidat | Versi | Lisensi | Windows | Putusan |
+| --- | --- | --- | --- | --- |
+| rodio | 0.23.0 (rilis 2026-10-11) | MIT OR Apache-2.0 | ya (pemutaran via cpal/WASAPI) | **dipilih**: API putar/loop paling sederhana, decoder symphonia per fitur |
+| kira | 0.12.5 | MIT (tercatat; verifikasi ulang saat pin) | ya (via cpal) | cadangan: mixer game-focused, API lebih besar dari kebutuhan |
+| cpal saja | 0.18.2 | Apache-2.0 (verifikasi ulang saat pin) | ya (WASAPI) | ditolak: terlalu rendah (mixing + decode tulis sendiri) |
+
+Desain: crate baru `ember-audio` (batas dependensi nyata: rodio terisolasi agar tes
+headless tak butuh device audio; target tanpa audio = sink no-op). Hanya format
+WAV dan OGG (keputusan: MP3 **tidak ikut** v0.2). Aset `assets/*.wav|*.ogg`
+divalidasi seperti PNG; decode saat load; fitur rodio dibatasi `wav` + `vorbis`.
+`ember package` menyalin aset audio.
+
+Verifikasi dependensi (sumber: crates.io API, 2026-10-16):
+
+| Crate | Versi terbaru | Lisensi tercatat | Windows | Status |
+| --- | --- | --- | --- | --- |
+| rodio | 0.23.0 (rilis 2026-10-11) | MIT OR Apache-2.0 | ya, pemutaran via cpal/WASAPI | kandidat dipilih; pin + uji kompatibilitas di M19 |
+| kira | 0.12.5 | MIT (tercatat; verifikasi ulang saat pin) | ya, via cpal | cadangan |
+| cpal | 0.18.2 | Apache-2.0 (verifikasi ulang saat pin) | ya, WASAPI | ditolak langsung (terlalu rendah) |
+
+Belum dicek: kompilasi bersama toolchain repo (rustc 1.99.0, edition 2024),
+ukuran dependency tree, perilaku tanpa device audio di headless/CI. Itu syarat M19.
+
+## 19. Editor v2
+
+- Geser entity di viewport: seret sprite terpilih; konversi layar→dunia yang sudah
+  ada dipakai; saat Play berlaku sementara seperti edit Inspector.
+- Undo/redo: operasi scene lewat satu jalur perintah (sudah disiapkan aturannya di
+  bagian 8); riwayat per sesi edit, bukan lintas Stop/Play.
+- Multi-select: klik-tambah; geser/ubah transform berlaku ke semua terpilih;
+  Inspector menampilkan nilai bersama atau campuran.
+
+## 20. Asumsi v0.2 dan pertanyaan terbuka
+
+Asumsi: satu OutputStream audio per proses cukup; nama entity unik per scene
+(dipakai `entity.*` dan `other`); koin/musuh berjumlah tetap di scene; musik satu
+trek loop; format scene boleh tambah field opsional dengan bump versi + tes kompat.
+
+Keputusan pemilik (2026-10-16): MP3 tidak ikut v0.2; fuzz = korpus dalam-repo +
+generator deterministik seed tetap di stable (bukan cargo-fuzz); performa = harness
+kecil dalam-repo (`Instant`), baseline ditulis ke file di repo, metrik minimal
+frame time, waktu update VM, draw count.
+
+Pertanyaan terbuka: preview animasi di Inspector (M20); harness fuzz rinci dan
+lokasi korpus (M15); format file baseline (M15).
+
+## 21. Tampilan skor dan kontrak menang/kalah (minimum, menunggu keputusan display)
+
+Jalur yang ada: `log` → Console editor + stdout player. HUD debug tidak dihitung.
+Skor via log saja tidak terlihat pemain di game paket (console bukan tampilan game).
+
+Opsi:
+
+- A. Log saja. Dampak nol (tanpa API, tanpa milestone). Ditolak untuk skor/menang
+  karena tak terlihat di game paket.
+- B. Judul window (`game.set_title`, usulan §14). Dampak kecil: +1 host fn (M16),
+  plumbing judul di player + Play editor (winit `set_title` sudah tersedia, tanpa
+  dep baru). Skor, nyawa, dan "MENANG"/"KALAH" tampil di judul.
+- C. Sprite digit (entity angka 0–9 diganti dari script). Butuh API ganti tekstur
+  sprite + belasan entity; rapuh. Cadangan bila B ditolak.
+- D. Renderer teks bitmap. Cakupan besar (font, glyph cache) → milestone sendiri.
+  Ditolak untuk v0.2.
+
+Usulan (belum diputuskan): opsi B.
+
+Kontrak minimum menang/kalah (berlaku apa pun opsi display): state dipegang script
+(global `var`: skor, nyawa, flag selesai); saat menang/kalah script memanggil
+`audio.stop` + menampilkan pesan lewat jalur display terpilih; input restart
+(`input.pressed(Key.Space)`) memanggil `game.restart` yang membangun ulang runtime
+dari scene + chunk yang sama (tanpa baca ulang disk bila sudah di memori).
+Detail visual menunggu M21.
+
+Pertanyaan terbuka (aset): `assets/sprite/` berisi `cat/cat_walk.png`,
+`knight/_Run.png`, `nature/1.png…5.png` — sumber dan lisensinya belum diketahui.
+Jangan dipakai di game contoh sebelum jelas; jangan disentuh tahap ini.
