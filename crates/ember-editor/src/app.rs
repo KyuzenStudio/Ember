@@ -5,7 +5,7 @@ use eframe::egui;
 use eframe::egui::containers::{CentralPanel, Panel};
 use ember_core::{Ty, Vec2};
 use ember_renderer::{Camera, Offscreen, load_png_file, pick_top, scene_sprites};
-use ember_runtime::{InputState as GameInput, Runtime, ScriptDef};
+use ember_runtime::{AudioCmd, InputState as GameInput, Runtime, ScriptDef};
 use ember_scene::{
     BodyKind, Camera2D, Collider2D, EntityId, RigidBody2D, Scene, ScriptValue, SpriteRenderer,
 };
@@ -46,6 +46,7 @@ pub struct EditorApp {
     play: Option<PlayState>,
     last_phys_sig: Vec<(u64, bool, bool, u8, u32, u32)>,
     title_restore: bool,
+    audio: Option<ember_audio::AudioEngine>,
 }
 
 fn physics_sig(scene: &Scene) -> Vec<(u64, bool, bool, u8, u32, u32)> {
@@ -202,6 +203,7 @@ impl EditorApp {
             play: None,
             last_phys_sig: Vec::new(),
             title_restore: false,
+            audio: None,
         };
         app.reload();
         app
@@ -258,6 +260,9 @@ impl EditorApp {
                 if let Some(play) = &self.play {
                     self.last_phys_sig = physics_sig(play.runtime.scene());
                 }
+                if self.audio.is_none() {
+                    self.audio = Some(ember_audio::AudioEngine::open());
+                }
                 self.selection = None;
                 self.log("playing".to_string());
             }
@@ -267,6 +272,9 @@ impl EditorApp {
 
     fn stop_play(&mut self) {
         if self.play.take().is_some() {
+            if let Some(engine) = &mut self.audio {
+                engine.stop();
+            }
             self.selection = None;
             self.log("stopped".to_string());
         }
@@ -316,6 +324,35 @@ impl EditorApp {
                             self.log(format!("error: {message}"));
                             self.stop_play();
                         }
+                    }
+                }
+                let cmds = match &mut self.play {
+                    Some(play) => play.runtime.take_audio(),
+                    None => Vec::new(),
+                };
+                if !cmds.is_empty() {
+                    if self.audio.is_none() {
+                        self.audio = Some(ember_audio::AudioEngine::open());
+                    }
+                    let dir = self.dir.clone();
+                    let mut failures = Vec::new();
+                    if let Some(engine) = &mut self.audio {
+                        for cmd in cmds {
+                            let result = match &cmd {
+                                AudioCmd::Play(path) => engine.play(&dir.join(path)),
+                                AudioCmd::Loop(path) => engine.play_loop(&dir.join(path)),
+                                AudioCmd::Stop => {
+                                    engine.stop();
+                                    Ok(())
+                                }
+                            };
+                            if let Err(e) = result {
+                                failures.push(format!("error: {e}"));
+                            }
+                        }
+                    }
+                    for failure in failures {
+                        self.log(failure);
                     }
                 }
             }
@@ -1164,6 +1201,66 @@ mod tests {
         app.stop_play();
         assert!(!app.playing());
         assert_eq!(app.scene.save_to_string().unwrap(), edit_before);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    fn tiny_wav() -> Vec<u8> {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(b"RIFF");
+        bytes.extend_from_slice(&44u32.to_le_bytes());
+        bytes.extend_from_slice(b"WAVEfmt ");
+        bytes.extend_from_slice(&16u32.to_le_bytes());
+        bytes.extend_from_slice(&1u16.to_le_bytes());
+        bytes.extend_from_slice(&1u16.to_le_bytes());
+        bytes.extend_from_slice(&44100u32.to_le_bytes());
+        bytes.extend_from_slice(&88200u32.to_le_bytes());
+        bytes.extend_from_slice(&2u16.to_le_bytes());
+        bytes.extend_from_slice(&16u16.to_le_bytes());
+        bytes.extend_from_slice(b"data");
+        bytes.extend_from_slice(&8u32.to_le_bytes());
+        bytes.extend_from_slice(&[0u8; 8]);
+        bytes
+    }
+
+    #[test]
+    fn play_drains_audio_queue() {
+        let (base, mut app) = test_app("audio");
+        let dir = base.join("Game");
+        std::fs::write(dir.join("assets").join("s.wav"), tiny_wav()).unwrap();
+        std::fs::write(
+            dir.join("scripts").join("player.em"),
+            "fn on_update(dt: f32) {\naudio.play(\"assets/s.wav\")\n}\n",
+        )
+        .unwrap();
+        app.start_play();
+        assert!(app.playing());
+        app.tick_play(&mut GameInput::new(), 1.0 / 60.0);
+        let engine = app.audio.as_ref().unwrap();
+        assert!(
+            engine.recorded().iter().any(|r| r.contains("s.wav")),
+            "{:?}",
+            engine.recorded()
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn stop_silences_music() {
+        let (base, mut app) = test_app("stopmusic");
+        let dir = base.join("Game");
+        std::fs::write(dir.join("assets").join("m.wav"), tiny_wav()).unwrap();
+        std::fs::write(
+            dir.join("scripts").join("player.em"),
+            "fn on_create() {\naudio.loop(\"assets/m.wav\")\n}\nfn on_update(dt: f32) {\n}\n",
+        )
+        .unwrap();
+        app.start_play();
+        assert!(app.playing());
+        app.tick_play(&mut GameInput::new(), 1.0 / 60.0);
+        app.stop_play();
+        assert!(!app.playing());
+        let recorded = app.audio.as_ref().unwrap().recorded();
+        assert_eq!(recorded.last().map(String::as_str), Some("stop"));
         let _ = std::fs::remove_dir_all(&base);
     }
 

@@ -33,6 +33,7 @@ struct App {
     window: Option<Arc<Window>>,
     renderer: Option<SceneRenderer>,
     runtime: Option<Runtime>,
+    audio: Option<ember_audio::AudioEngine>,
     input: InputState,
     last: Option<Instant>,
     error: Option<String>,
@@ -94,8 +95,32 @@ impl App {
             }
             return;
         }
-        for line in &logs {
-            println!("{line}");
+        let cmds = runtime.take_audio();
+        if !cmds.is_empty() {
+            if self.audio.is_none() {
+                self.audio = Some(ember_audio::AudioEngine::open());
+            }
+            if let Some(engine) = &mut self.audio {
+                let mut failures = Vec::new();
+                for cmd in &cmds {
+                    let result = match cmd {
+                        ember_runtime::AudioCmd::Play(path) => engine.play(&self.dir.join(path)),
+                        ember_runtime::AudioCmd::Loop(path) => {
+                            engine.play_loop(&self.dir.join(path))
+                        }
+                        ember_runtime::AudioCmd::Stop => {
+                            engine.stop();
+                            Ok(())
+                        }
+                    };
+                    if let Err(e) = result {
+                        failures.push(e.to_string());
+                    }
+                }
+                for failure in failures {
+                    eprintln!("error: {failure}");
+                }
+            }
         }
         let mut sizes = std::collections::HashMap::new();
         for entity in &runtime.scene().entities {
@@ -168,9 +193,34 @@ impl ApplicationHandler for App {
         }
         let mut logs = Vec::new();
         match Runtime::load_prebuilt(game.scene, game.scripts, &mut logs) {
-            Ok(runtime) => {
+            Ok(mut runtime) => {
                 for line in &logs {
                     println!("{line}");
+                }
+                let cmds = runtime.take_audio();
+                if !cmds.is_empty() {
+                    if self.audio.is_none() {
+                        self.audio = Some(ember_audio::AudioEngine::open());
+                    }
+                    if let Some(engine) = &mut self.audio {
+                        for cmd in cmds {
+                            let result = match &cmd {
+                                ember_runtime::AudioCmd::Play(path) => {
+                                    engine.play(&self.dir.join(path))
+                                }
+                                ember_runtime::AudioCmd::Loop(path) => {
+                                    engine.play_loop(&self.dir.join(path))
+                                }
+                                ember_runtime::AudioCmd::Stop => {
+                                    engine.stop();
+                                    Ok(())
+                                }
+                            };
+                            if let Err(e) = result {
+                                eprintln!("error: {e}");
+                            }
+                        }
+                    }
                 }
                 self.window = Some(window);
                 self.renderer = Some(renderer);
@@ -268,6 +318,7 @@ fn main() {
         window: None,
         renderer: None,
         runtime: None,
+        audio: None,
         input: InputState::new(),
         last: None,
         error: None,

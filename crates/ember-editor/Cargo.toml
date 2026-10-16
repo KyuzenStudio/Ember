@@ -16,3 +16,4 @@ ember-renderer = { path = "../ember-renderer" }
 ember-runtime = { path = "../ember-runtime" }
 ember-lang = { path = "../ember-lang" }
 ember-vm = { path = "../ember-vm" }
+ember-audio = { path = "../ember-audio" }

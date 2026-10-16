@@ -397,6 +397,13 @@ Verifikasi dependensi (sumber: crates.io API, 2026-10-16):
 Belum dicek: kompilasi bersama toolchain repo (rustc 1.99.0, edition 2024),
 ukuran dependency tree, perilaku tanpa device audio di headless/CI. Itu syarat M19.
 
+Catatan implementasi M19: rodio 0.23.0 dipakai (API baru tanpa `OutputStream`/
+`Sink`: `DeviceSinkBuilder::open_default_sink` + `mixer.add` untuk SFX +
+`Player::connect_new` untuk loop musik). Fitur dibatasi
+`playback`+`wav`+`vorbis`. Validasi selalu jalan (path ada, ekstensi, header
+decode); tanpa device audio mesin jatuh ke noop yang tetap mencatat. Antre
+`take_audio` dikonsumsi Play editor dan player; error tampil di log, tanpa crash.
+
 ## 19. Editor v2
 
 - Geser entity di viewport: seret sprite terpilih; konversi layar→dunia yang sudah

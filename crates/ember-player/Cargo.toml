@@ -17,4 +17,5 @@ ember-project = { path = "../ember-project" }
 ember-runtime = { path = "../ember-runtime" }
 ember-renderer = { path = "../ember-renderer" }
 ember-vm = { path = "../ember-vm" }
+ember-audio = { path = "../ember-audio" }
 winit = "0.30"
