@@ -163,4 +163,19 @@ mod tests {
         assert!(err.to_string().contains("cannot decode"), "{err}");
         let _ = std::fs::remove_file(&path);
     }
+
+    #[test]
+    fn sample_assets_decode() {
+        let base = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../samples/coin-dash/assets");
+        let mut engine = AudioEngine::open();
+        for name in ["coin.wav", "jump.wav", "hit.wav"] {
+            engine
+                .play(&base.join(name))
+                .unwrap_or_else(|e| panic!("{name}: {e}"));
+        }
+        engine
+            .play_loop(&base.join("music.wav"))
+            .expect("music.wav must decode");
+    }
 }

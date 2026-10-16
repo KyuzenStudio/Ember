@@ -1,0 +1,5 @@
+(
+    format_version: 1,
+    name: "CoinDash",
+    startup_scene: "scenes/main.ron",
+)

@@ -1,0 +1,297 @@
+(
+    format_version: 5,
+    name: "CoinDash",
+    entities: [
+        (
+            id: (1),
+            name: "Ground",
+            transform: (
+                position: (
+                    x: 5.0,
+                    y: -1.0,
+                ),
+                rotation_degrees: 0.0,
+                scale: (
+                    x: 24.0,
+                    y: 1.0,
+                ),
+            ),
+            sprite: Some((
+                texture: "assets/player.png",
+                tint: (0.25, 0.5, 0.25, 1.0),
+                sorting_order: -1,
+            )),
+            camera: None,
+            script: None,
+            script_values: {},
+            scripts: [],
+            collider: Some((
+                hx: 12.0,
+                hy: 1.0,
+                sensor: false,
+            )),
+            rigidbody: Some((
+                kind: Static,
+                velocity: (
+                    x: 0.0,
+                    y: 0.0,
+                ),
+                gravity_scale: 1.0,
+            )),
+            anim: None,
+        ),
+        (
+            id: (2),
+            name: "Player",
+            transform: (
+                position: (
+                    x: 0.0,
+                    y: 2.0,
+                ),
+                rotation_degrees: 0.0,
+                scale: (
+                    x: 1.0,
+                    y: 1.0,
+                ),
+            ),
+            sprite: Some((
+                texture: "assets/player.png",
+                tint: (1.0, 1.0, 1.0, 1.0),
+                sorting_order: 0,
+            )),
+            camera: None,
+            script: None,
+            script_values: {},
+            scripts: [
+                (
+                    path: "scripts/player.em",
+                    values: {},
+                ),
+            ],
+            collider: Some((
+                hx: 0.5,
+                hy: 0.5,
+                sensor: false,
+            )),
+            rigidbody: Some((
+                kind: Dynamic,
+                velocity: (
+                    x: 0.0,
+                    y: 0.0,
+                ),
+                gravity_scale: 1.0,
+            )),
+            anim: Some((
+                clips: [
+                    (
+                        name: "idle",
+                        frames: [
+                            "assets/player.png",
+                        ],
+                        fps: 4.0,
+                        looped: true,
+                    ),
+                    (
+                        name: "walk",
+                        frames: [
+                            "assets/walk0.png",
+                            "assets/walk1.png",
+                        ],
+                        fps: 8.0,
+                        looped: true,
+                    ),
+                ],
+                current: "idle",
+                t: 0.0,
+            )),
+        ),
+        (
+            id: (3),
+            name: "Coin1",
+            transform: (
+                position: (
+                    x: 2.0,
+                    y: 0.5,
+                ),
+                rotation_degrees: 0.0,
+                scale: (
+                    x: 0.7,
+                    y: 0.7,
+                ),
+            ),
+            sprite: Some((
+                texture: "assets/coin.png",
+                tint: (1.0, 1.0, 1.0, 1.0),
+                sorting_order: 0,
+            )),
+            camera: None,
+            script: None,
+            script_values: {},
+            scripts: [],
+            collider: Some((
+                hx: 0.4,
+                hy: 0.4,
+                sensor: true,
+            )),
+            rigidbody: Some((
+                kind: Static,
+                velocity: (
+                    x: 0.0,
+                    y: 0.0,
+                ),
+                gravity_scale: 1.0,
+            )),
+            anim: None,
+        ),
+        (
+            id: (4),
+            name: "Coin2",
+            transform: (
+                position: (
+                    x: 4.0,
+                    y: 0.5,
+                ),
+                rotation_degrees: 0.0,
+                scale: (
+                    x: 0.7,
+                    y: 0.7,
+                ),
+            ),
+            sprite: Some((
+                texture: "assets/coin.png",
+                tint: (1.0, 1.0, 1.0, 1.0),
+                sorting_order: 0,
+            )),
+            camera: None,
+            script: None,
+            script_values: {},
+            scripts: [],
+            collider: Some((
+                hx: 0.4,
+                hy: 0.4,
+                sensor: true,
+            )),
+            rigidbody: Some((
+                kind: Static,
+                velocity: (
+                    x: 0.0,
+                    y: 0.0,
+                ),
+                gravity_scale: 1.0,
+            )),
+            anim: None,
+        ),
+        (
+            id: (5),
+            name: "Coin3",
+            transform: (
+                position: (
+                    x: 11.0,
+                    y: 0.5,
+                ),
+                rotation_degrees: 0.0,
+                scale: (
+                    x: 0.7,
+                    y: 0.7,
+                ),
+            ),
+            sprite: Some((
+                texture: "assets/coin.png",
+                tint: (1.0, 1.0, 1.0, 1.0),
+                sorting_order: 0,
+            )),
+            camera: None,
+            script: None,
+            script_values: {},
+            scripts: [],
+            collider: Some((
+                hx: 0.4,
+                hy: 0.4,
+                sensor: true,
+            )),
+            rigidbody: Some((
+                kind: Static,
+                velocity: (
+                    x: 0.0,
+                    y: 0.0,
+                ),
+                gravity_scale: 1.0,
+            )),
+            anim: None,
+        ),
+        (
+            id: (6),
+            name: "Enemy",
+            transform: (
+                position: (
+                    x: 8.0,
+                    y: 0.5,
+                ),
+                rotation_degrees: 0.0,
+                scale: (
+                    x: 1.0,
+                    y: 1.0,
+                ),
+            ),
+            sprite: Some((
+                texture: "assets/enemy.png",
+                tint: (1.0, 1.0, 1.0, 1.0),
+                sorting_order: 0,
+            )),
+            camera: None,
+            script: None,
+            script_values: {},
+            scripts: [
+                (
+                    path: "scripts/enemy.em",
+                    values: {},
+                ),
+            ],
+            collider: Some((
+                hx: 0.5,
+                hy: 0.5,
+                sensor: false,
+            )),
+            rigidbody: Some((
+                kind: Static,
+                velocity: (
+                    x: 0.0,
+                    y: 0.0,
+                ),
+                gravity_scale: 1.0,
+            )),
+            anim: None,
+        ),
+        (
+            id: (7),
+            name: "MainCamera",
+            transform: (
+                position: (
+                    x: 0.0,
+                    y: 0.0,
+                ),
+                rotation_degrees: 0.0,
+                scale: (
+                    x: 1.0,
+                    y: 1.0,
+                ),
+            ),
+            sprite: None,
+            camera: Some((
+                height: 12.0,
+            )),
+            script: None,
+            script_values: {},
+            scripts: [
+                (
+                    path: "scripts/cam.em",
+                    values: {},
+                ),
+            ],
+            collider: None,
+            rigidbody: None,
+            anim: None,
+        ),
+    ],
+    music: Some("assets/music.wav"),
+)

@@ -144,4 +144,32 @@ mod tests {
         assert!(script_stem("scripts/sub/ai.em").is_none());
         assert!(script_stem("other/player.em").is_none());
     }
+
+    #[test]
+    fn loads_sample_without_sources() {
+        let src = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../samples/coin-dash");
+        let root = std::env::temp_dir().join(format!("ember-player-sample-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let proj = root.join("CoinDash");
+        let mut stack = vec![src.clone()];
+        while let Some(top) = stack.pop() {
+            let rel = top.strip_prefix(&src).unwrap();
+            let target = proj.join(rel);
+            if top.is_dir() {
+                std::fs::create_dir_all(&target).unwrap();
+                for entry in std::fs::read_dir(&top).unwrap() {
+                    stack.push(entry.unwrap().path());
+                }
+            } else {
+                std::fs::copy(&top, &target).unwrap();
+            }
+        }
+        ember_project::build_project(&proj).unwrap();
+        std::fs::remove_dir_all(proj.join("scripts")).unwrap();
+        let game = load_game(&proj).unwrap();
+        assert_eq!(game.name, "CoinDash");
+        assert_eq!(game.scripts.len(), 3);
+        assert_eq!(game.scene.music, Some("assets/music.wav".to_string()));
+        let _ = std::fs::remove_dir_all(&root);
+    }
 }

@@ -648,6 +648,48 @@ mod tests {
         cleanup(&dir);
     }
 
+    fn copy_tree(src: &Path, dest: &Path) {
+        let mut stack = vec![src.to_path_buf()];
+        while let Some(top) = stack.pop() {
+            let rel = top.strip_prefix(src).unwrap();
+            let target = dest.join(rel);
+            if top.is_dir() {
+                std::fs::create_dir_all(&target).unwrap();
+                for entry in std::fs::read_dir(&top).unwrap() {
+                    stack.push(entry.unwrap().path());
+                }
+            } else {
+                std::fs::copy(&top, &target).unwrap();
+            }
+        }
+    }
+
+    #[test]
+    fn package_sample_includes_audio_without_sources() {
+        let src = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../samples/coin-dash");
+        let dir = fresh_dir("pkgsample");
+        let proj = dir.join("CoinDash");
+        copy_tree(&src, &proj);
+        let fake = dir.join("fake-player.exe");
+        std::fs::write(&fake, b"exe").unwrap();
+        let report = package_project(&proj, &fake).unwrap();
+        for wav in ["coin.wav", "jump.wav", "hit.wav", "music.wav"] {
+            assert!(
+                report.dir.join("assets").join(wav).is_file(),
+                "{wav} missing from package"
+            );
+        }
+        for stem in ["player.embc", "cam.embc", "enemy.embc"] {
+            assert!(
+                report.dir.join("build").join(stem).is_file(),
+                "{stem} missing from package"
+            );
+        }
+        assert!(!report.dir.join("scripts").exists());
+        assert!(!report.dir.join("build").join("assets").exists());
+        cleanup(&dir);
+    }
+
     #[test]
     fn missing_script_source_rejected() {
         let dir = fresh_dir("noscript");
