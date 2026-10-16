@@ -437,7 +437,10 @@ Opsi:
 - D. Renderer teks bitmap. Cakupan besar (font, glyph cache) → milestone sendiri.
   Ditolak untuk v0.2.
 
-Usulan (belum diputuskan): opsi B.
+Usulan (keputusan pemilik 2026-10-16): opsi B ditetapkan sebagai jalur minimum
+untuk M16–M20 (`game.set_title` masuk Host API v2). Untuk M21, HUD final
+direncanakan lewat sprite digit dan sprite pesan memakai `SpriteAnim`
+(frame = digit/mesan), tanpa library teks baru. Larangan library teks tetap.
 
 Kontrak minimum menang/kalah (berlaku apa pun opsi display): state dipegang script
 (global `var`: skor, nyawa, flag selesai); saat menang/kalah script memanggil
@@ -449,3 +452,7 @@ Detail visual menunggu M21.
 Pertanyaan terbuka (aset): `assets/sprite/` berisi `cat/cat_walk.png`,
 `knight/_Run.png`, `nature/1.png…5.png` — sumber dan lisensinya belum diketahui.
 Jangan dipakai di game contoh sebelum jelas; jangan disentuh tahap ini.
+
+Pertanyaan terbuka (HUD M21): apakah `SpriteAnim` cukup untuk angka multi-digit
+(mis. skor 12 = dua entity digit + logika susun, atau satu klip per nilai)?
+Diputuskan saat M21; tanpa library teks apa pun.

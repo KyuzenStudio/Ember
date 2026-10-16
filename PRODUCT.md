@@ -163,7 +163,8 @@ hanya jika game contoh membutuhkannya.
 - Semua non-goals v0.1 tetap berlaku (native compiler/JIT/LLVM/Cranelift, 3D,
   multiplayer, mobile, visual scripting, marketplace, GC, dynamic typing,
   generics, closures, macros, async, reflection, modul kompleks).
-- UI teks dalam game (skor via `log`/Console saja).
+- UI teks dalam game (skor via judul window/log di M16–M20; HUD sprite digit di M21;
+  tanpa library teks).
 - Fisika lanjutan: sendi, raycast, CCD selektif, kecuali game contoh membutuhkannya.
 - Format audio selain WAV/Vorbis (MP3 opsional, diputuskan di M19).
 - Text editor kustom di dalam editor (tetap buka editor eksternal).

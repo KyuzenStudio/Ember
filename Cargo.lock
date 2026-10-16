@@ -1001,9 +1001,13 @@ version = "0.1.0"
 dependencies = [
  "ember-core",
  "ember-lang",
+ "ember-renderer",
  "ember-scene",
  "ember-vm",
+ "image",
+ "pollster",
  "rapier2d",
+ "wgpu",
 ]
 
 [[package]]

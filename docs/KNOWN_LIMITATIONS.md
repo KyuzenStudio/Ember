@@ -1,15 +1,21 @@
-# Keterbatasan yang diketahui (v0.1, penutupan 2026-10-16)
+# Keterbatasan yang diketahui (v0.1 + M15, 2026-10-16)
 
-## Performa: belum diukur
+## Performa: baseline awal, bukan benchmark
 
-- Tidak ada benchmark VM (instruksi/detik), renderer (fps/scene), atau waktu load project.
-- Fisika memakai fixed timestep 1/60 + akumulator; benar secara simulasi, biaya CPU per
-  step belum diprofilkan. Batas 1024 sprite belum diuji bebannya.
+- `docs/PERF_BASELINE.md` (profil debug + release, mesin penulis): VM update,
+  fisika 50 body, kompilasi, draw count 200 sprite, frame GPU offscreen.
+- Bukan klaim umum: angka khusus mesin + profil; beban 1024 sprite dan waktu load
+  project belum diukur; frame window nyata vsync belum diukur.
 
-## Fuzzing: belum ada
+## Fuzzing: cakupan kecil
 
-- Tidak ada fuzz input untuk parser, checker, verifier bytecode, loader RON, atau decoder PNG.
-- Input malformed ditangani lewat error eksplisit + tes kasus, bukan fuzz.
+- M15: korpus malformed + generator deterministik (seed tetap) untuk
+  lexer/parser/checker/compiler (`ember-lang`) dan decode/verifier/VM
+  (`ember-vm`); 512 iterasi per crate secara default, temuan nihil.
+- Cakupan kecil: naikkan lewat variabel lingkungan `EMBER_FUZZ_ITERS`
+  (mis. `EMBER_FUZZ_ITERS=10000 cargo test -p ember-lang --test malformed`).
+  Seed tetap sehingga kegagalan dapat direproduksi dari seed + indeks.
+- Belum ada fuzz untuk loader RON, decoder PNG, dan loader scene.
 
 ## CI: belum ada
 
