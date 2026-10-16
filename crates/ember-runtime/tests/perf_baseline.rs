@@ -20,9 +20,9 @@ fn bench_script() -> (Runtime, std::time::Duration) {
         &mut Vec::new(),
     )
     .unwrap();
-    let input = InputState::new();
+    let mut input = InputState::new();
     for _ in 0..2000 {
-        rt.tick(&input, 1.0 / 60.0, &mut Vec::new()).unwrap();
+        rt.tick(&mut input, 1.0 / 60.0, &mut Vec::new()).unwrap();
     }
     (rt, start.elapsed())
 }
@@ -39,13 +39,17 @@ fn bench_physics() -> std::time::Duration {
             velocity: ember_core::Vec2::zero(),
             gravity_scale: 1.0,
         });
-        e.collider = Some(Collider2D { hx: 0.5, hy: 0.5 });
+        e.collider = Some(Collider2D {
+            hx: 0.5,
+            hy: 0.5,
+            sensor: false,
+        });
     }
     let mut rt = Runtime::load(scene, vec![], &mut Vec::new()).unwrap();
-    let input = InputState::new();
+    let mut input = InputState::new();
     let start = Instant::now();
     for _ in 0..600 {
-        rt.tick(&input, 1.0 / 60.0, &mut Vec::new()).unwrap();
+        rt.tick(&mut input, 1.0 / 60.0, &mut Vec::new()).unwrap();
     }
     start.elapsed()
 }

@@ -1,10 +1,51 @@
 use std::collections::HashMap;
+use std::sync::Mutex;
 
 use ember_scene::{BodyKind, Entity, EntityId};
 use rapier2d::prelude::{Vector, *};
 
 pub const STEP: f32 = 1.0 / 60.0;
 const MAX_STEPS: u32 = 3;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Contact {
+    pub a: EntityId,
+    pub b: EntityId,
+    pub begun: bool,
+}
+
+#[derive(Default)]
+struct Collector {
+    events: Mutex<Vec<(ColliderHandle, ColliderHandle, bool)>>,
+}
+
+impl EventHandler for Collector {
+    fn handle_collision_event(
+        &self,
+        _bodies: &RigidBodySet,
+        _colliders: &ColliderSet,
+        event: CollisionEvent,
+        _pair: Option<&ContactPair>,
+    ) {
+        let (h1, h2, begun) = match event {
+            CollisionEvent::Started(h1, h2, _) => (h1, h2, true),
+            CollisionEvent::Stopped(h1, h2, _) => (h1, h2, false),
+        };
+        self.events.lock().unwrap().push((h1, h2, begun));
+    }
+
+    fn handle_contact_force_event(
+        &self,
+        _dt: f32,
+        _bodies: &RigidBodySet,
+        _colliders: &ColliderSet,
+        _pair: &ContactPair,
+        _total_force: f32,
+    ) {
+    }
+
+    fn handle_soft_body_tear_event(&self, _bodies: &SoftBodySet, _event: &SoftBodyTearEvent) {}
+}
 
 pub struct PhysicsWorld {
     bodies: RigidBodySet,
@@ -18,7 +59,9 @@ pub struct PhysicsWorld {
     multibody: MultibodyJointSet,
     soft: SoftBodySet,
     ccd: CCDSolver,
+    events: Collector,
     handles: HashMap<EntityId, RigidBodyHandle>,
+    by_collider: HashMap<ColliderHandle, EntityId>,
     acc: f32,
 }
 
@@ -36,7 +79,9 @@ impl PhysicsWorld {
             multibody: MultibodyJointSet::new(),
             soft: SoftBodySet::new(),
             ccd: CCDSolver::new(),
+            events: Collector::default(),
             handles: HashMap::new(),
+            by_collider: HashMap::new(),
             acc: 0.0,
         };
         for entity in entities {
@@ -63,10 +108,14 @@ impl PhysicsWorld {
                         entity.name
                     ));
                 }
-                let shape = ColliderBuilder::cuboid(collider.hx, collider.hy).build();
-                world
+                let shape = ColliderBuilder::cuboid(collider.hx, collider.hy)
+                    .sensor(collider.sensor)
+                    .active_events(ActiveEvents::COLLISION_EVENTS)
+                    .build();
+                let ch = world
                     .colliders
                     .insert_with_parent(shape, handle, &mut world.bodies);
+                world.by_collider.insert(ch, entity.id);
             }
             world.handles.insert(entity.id, handle);
         }
@@ -105,8 +154,22 @@ impl PhysicsWorld {
             &mut self.soft,
             &mut self.ccd,
             &(),
-            &(),
+            &self.events,
         );
+    }
+
+    pub fn take_contacts(&mut self) -> Vec<Contact> {
+        self.events
+            .events
+            .lock()
+            .unwrap()
+            .drain(..)
+            .filter_map(|(h1, h2, begun)| {
+                let a = self.by_collider.get(&h1).copied()?;
+                let b = self.by_collider.get(&h2).copied()?;
+                (a != b).then_some(Contact { a, b, begun })
+            })
+            .collect()
     }
 
     fn write_back(&mut self, entities: &mut [Entity]) {
@@ -161,7 +224,11 @@ mod tests {
             velocity: Vec2::zero(),
             gravity_scale: 1.0,
         });
-        ground_entity.collider = Some(Collider2D { hx: 10.0, hy: 1.0 });
+        ground_entity.collider = Some(Collider2D {
+            hx: 10.0,
+            hy: 1.0,
+            sensor: false,
+        });
         let cube = scene.spawn("Cube");
         let cube_entity = scene.entities.iter_mut().find(|e| e.id == cube).unwrap();
         cube_entity.transform.position = Vec2::new(0.0, 5.0);
@@ -170,7 +237,11 @@ mod tests {
             velocity: Vec2::zero(),
             gravity_scale: 1.0,
         });
-        cube_entity.collider = Some(Collider2D { hx: 0.5, hy: 0.5 });
+        cube_entity.collider = Some(Collider2D {
+            hx: 0.5,
+            hy: 0.5,
+            sensor: false,
+        });
         scene
     }
 
@@ -225,7 +296,11 @@ mod tests {
             velocity: Vec2::zero(),
             gravity_scale: 1.0,
         });
-        entity.collider = Some(Collider2D { hx: 0.0, hy: 1.0 });
+        entity.collider = Some(Collider2D {
+            hx: 0.0,
+            hy: 1.0,
+            sensor: false,
+        });
         let err = PhysicsWorld::build(&scene.entities).unwrap_err();
         assert!(err.contains("must be positive"));
     }
@@ -241,7 +316,11 @@ mod tests {
             velocity: ember_core::Vec2::zero(),
             gravity_scale: 1.0,
         });
-        entity.collider = Some(Collider2D { hx: 0.5, hy: 0.5 });
+        entity.collider = Some(Collider2D {
+            hx: 0.5,
+            hy: 0.5,
+            sensor: false,
+        });
         let mut world = PhysicsWorld::build(&scene.entities).unwrap();
         for _ in 0..240 {
             world.tick(&mut scene.entities, 1.0 / 600.0);

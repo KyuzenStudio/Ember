@@ -37,7 +37,7 @@ Baseline performa tertulis ke `docs/PERF_BASELINE.md` termasuk frame GPU riil.
 | cargo test --locked | 202 lulus, 0 gagal, 0 diabaikan | 196 lama + 2 lang fuzz + 3 vm fuzz + 1 perf |
 | cargo clippy --all-targets --locked -- -D warnings | bersih | 1 temuan `collapsible_if` diperbaiki saat sesi |
 | cargo fmt --check | lulus | |
-| langkah CI (.github/workflows/ci.yml) | hijau lokal | run GitHub-hosted butuh push; tautan dicatat di sini setelah ada — syarat BELUM terpenuhi |
+| langkah CI (.github/workflows/ci.yml) | hijau lokal | TERBLOKIR: penguji tidak bisa push (masalah payment GitHub). Tautan run GitHub TIDAK ADA — syarat BELUM terpenuhi, tetap terbuka |
 
 ## Demonstrasi
 

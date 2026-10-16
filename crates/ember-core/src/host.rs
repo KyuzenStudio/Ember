@@ -22,6 +22,81 @@ pub const HOST_FUNCTIONS: &[HostFn] = &[
         params: &[Ty::F32, Ty::F32],
         ret: Ty::Void,
     },
+    HostFn {
+        path: "input.pressed",
+        params: &[Ty::I32],
+        ret: Ty::Bool,
+    },
+    HostFn {
+        path: "transform.x",
+        params: &[],
+        ret: Ty::F32,
+    },
+    HostFn {
+        path: "transform.y",
+        params: &[],
+        ret: Ty::F32,
+    },
+    HostFn {
+        path: "transform.set",
+        params: &[Ty::F32, Ty::F32],
+        ret: Ty::Void,
+    },
+    HostFn {
+        path: "entity.x",
+        params: &[Ty::Str],
+        ret: Ty::F32,
+    },
+    HostFn {
+        path: "entity.y",
+        params: &[Ty::Str],
+        ret: Ty::F32,
+    },
+    HostFn {
+        path: "entity.destroy",
+        params: &[Ty::Str],
+        ret: Ty::Void,
+    },
+    HostFn {
+        path: "str.of_i",
+        params: &[Ty::I32],
+        ret: Ty::Str,
+    },
+    HostFn {
+        path: "str.cat",
+        params: &[Ty::Str, Ty::Str],
+        ret: Ty::Str,
+    },
+    HostFn {
+        path: "audio.play",
+        params: &[Ty::Str],
+        ret: Ty::Void,
+    },
+    HostFn {
+        path: "audio.loop",
+        params: &[Ty::Str],
+        ret: Ty::Void,
+    },
+    HostFn {
+        path: "audio.stop",
+        params: &[],
+        ret: Ty::Void,
+    },
+    HostFn {
+        path: "anim.play",
+        params: &[Ty::Str],
+        ret: Ty::Void,
+    },
+    HostFn {
+        path: "game.restart",
+        params: &[],
+        ret: Ty::Void,
+    },
+    HostFn {
+        path: "game.set_title",
+        params: &[Ty::Str],
+        ret: Ty::Void,
+    },
 ];
 
 pub struct HostConst {
@@ -56,7 +131,17 @@ pub const HOST_CONSTS: &[HostConst] = &[
     },
 ];
 
-pub const HOST_ROOTS: &[&str] = &["log", "input", "transform", "Key"];
+pub const HOST_ROOTS: &[&str] = &[
+    "log",
+    "input",
+    "transform",
+    "Key",
+    "entity",
+    "str",
+    "audio",
+    "anim",
+    "game",
+];
 
 pub fn host_fn(path: &str) -> Option<&'static HostFn> {
     HOST_FUNCTIONS.iter().find(|f| f.path == path)

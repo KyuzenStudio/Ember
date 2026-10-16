@@ -4,7 +4,7 @@ use std::path::Path;
 use ember_core::Vec2;
 use serde::{Deserialize, Serialize};
 
-pub const SCENE_FORMAT_VERSION: u32 = 1;
+pub const SCENE_FORMAT_VERSION: u32 = 2;
 
 #[derive(Debug, Clone)]
 pub struct SceneError(String);
@@ -53,6 +53,8 @@ pub struct Camera2D {
 pub struct Collider2D {
     pub hx: f32,
     pub hy: f32,
+    #[serde(default)]
+    pub sensor: bool,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -138,7 +140,7 @@ impl Scene {
     pub fn load_from_str(src: &str, source: &str) -> Result<Self, SceneError> {
         let scene: Scene =
             ron::from_str(src).map_err(|e| SceneError(format!("parse '{source}': {e}")))?;
-        if scene.format_version != SCENE_FORMAT_VERSION {
+        if scene.format_version != SCENE_FORMAT_VERSION && scene.format_version != 1 {
             return Err(SceneError(format!(
                 "parse '{source}': unsupported format version {}, expected {SCENE_FORMAT_VERSION}",
                 scene.format_version
@@ -236,7 +238,11 @@ mod tests {
         let mut scene = Scene::new("phys");
         let id = scene.spawn("Box");
         let entity = scene.entities.iter_mut().find(|e| e.id == id).unwrap();
-        entity.collider = Some(Collider2D { hx: 0.5, hy: 0.5 });
+        entity.collider = Some(Collider2D {
+            hx: 0.5,
+            hy: 0.5,
+            sensor: false,
+        });
         entity.rigidbody = Some(RigidBody2D {
             kind: BodyKind::Dynamic,
             velocity: Vec2::new(1.0, 0.0),
@@ -276,6 +282,37 @@ mod tests {
         let err = Scene::load_from_str(&scene.save_to_string().unwrap(), "v.ron").unwrap_err();
         assert!(err.to_string().contains("999"));
         assert!(err.to_string().contains("v.ron"));
+    }
+
+    #[test]
+    fn v1_scene_without_sensor_loads() {
+        let src = "(format_version: 1, name: \"old\", entities: [(
+            id: (1), name: \"E\", transform: (position: (x: 0.0, y: 0.0),
+            rotation_degrees: 0.0, scale: (x: 1.0, y: 1.0)),
+            sprite: None, camera: None, script: None, script_values: {},
+            collider: Some((hx: 0.5, hy: 0.5)), rigidbody: None)])";
+        let loaded = Scene::load_from_str(src, "old.ron").unwrap();
+        let collider = loaded.entities[0].collider.as_ref().unwrap();
+        assert!(!collider.sensor);
+    }
+
+    #[test]
+    fn sensor_round_trip() {
+        let mut scene = Scene::new("sens");
+        let id = scene.spawn("Coin");
+        scene
+            .entities
+            .iter_mut()
+            .find(|e| e.id == id)
+            .unwrap()
+            .collider = Some(Collider2D {
+            hx: 0.5,
+            hy: 0.5,
+            sensor: true,
+        });
+        let loaded = Scene::load_from_str(&scene.save_to_string().unwrap(), "test").unwrap();
+        assert_eq!(loaded, scene);
+        assert!(loaded.entities[0].collider.as_ref().unwrap().sensor);
     }
 
     #[test]

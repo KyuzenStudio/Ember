@@ -59,9 +59,39 @@ impl App {
         };
         self.last = Some(now);
         let mut logs = Vec::new();
-        if let Err(e) = runtime.tick(&self.input, dt, &mut logs) {
+        if let Err(e) = runtime.tick(&mut self.input, dt, &mut logs) {
             self.error = Some(e.to_string());
             event_loop.exit();
+            return;
+        }
+        for line in &logs {
+            println!("{line}");
+        }
+        if let Some(title) = runtime.take_title() {
+            window.set_title(&title);
+        }
+        if runtime.take_restart_requested() {
+            match load_game(&self.dir) {
+                Ok(game) => {
+                    let mut fresh_logs = Vec::new();
+                    match Runtime::load_prebuilt(game.scene, game.scripts, &mut fresh_logs) {
+                        Ok(fresh) => {
+                            for line in &fresh_logs {
+                                println!("{line}");
+                            }
+                            self.runtime = Some(fresh);
+                        }
+                        Err(e) => {
+                            self.error = Some(e.to_string());
+                            event_loop.exit();
+                        }
+                    }
+                }
+                Err(e) => {
+                    self.error = Some(e.to_string());
+                    event_loop.exit();
+                }
+            }
             return;
         }
         for line in &logs {

@@ -40,7 +40,20 @@ impl Value {
 
 pub trait Host {
     fn input_down(&mut self, key: i32) -> bool;
+    fn input_pressed(&mut self, key: i32) -> bool;
     fn transform_move(&mut self, dx: f32, dy: f32);
+    fn transform_x(&mut self) -> f32;
+    fn transform_y(&mut self) -> f32;
+    fn transform_set(&mut self, x: f32, y: f32);
+    fn entity_x(&mut self, name: &str) -> Result<f32, String>;
+    fn entity_y(&mut self, name: &str) -> Result<f32, String>;
+    fn entity_destroy(&mut self, name: &str) -> Result<(), String>;
+    fn audio_play(&mut self, name: &str);
+    fn audio_loop(&mut self, name: &str);
+    fn audio_stop(&mut self);
+    fn anim_play(&mut self, clip: &str);
+    fn game_restart(&mut self);
+    fn game_set_title(&mut self, title: &str);
     fn log(&mut self, msg: &str);
 }
 
@@ -524,6 +537,157 @@ impl Vm {
                 host.transform_move(*dx, *dy);
                 Ok(None)
             }
+            "input.pressed" => {
+                let [Value::I32(k)] = args else {
+                    return Err(self.failure_at(
+                        ip,
+                        ErrorKind::HostFailed("input.pressed takes an i32".to_string()),
+                    ));
+                };
+                Ok(Some(Value::Bool(host.input_pressed(*k))))
+            }
+            "transform.x" => {
+                if !args.is_empty() {
+                    return Err(self.failure_at(
+                        ip,
+                        ErrorKind::HostFailed("transform.x takes no arguments".to_string()),
+                    ));
+                }
+                Ok(Some(Value::F32(host.transform_x())))
+            }
+            "transform.y" => {
+                if !args.is_empty() {
+                    return Err(self.failure_at(
+                        ip,
+                        ErrorKind::HostFailed("transform.y takes no arguments".to_string()),
+                    ));
+                }
+                Ok(Some(Value::F32(host.transform_y())))
+            }
+            "transform.set" => {
+                let [Value::F32(x), Value::F32(y)] = args else {
+                    return Err(self.failure_at(
+                        ip,
+                        ErrorKind::HostFailed("transform.set takes f32s".to_string()),
+                    ));
+                };
+                host.transform_set(*x, *y);
+                Ok(None)
+            }
+            "entity.x" => {
+                let [Value::Str(name)] = args else {
+                    return Err(self.failure_at(
+                        ip,
+                        ErrorKind::HostFailed("entity.x takes a string".to_string()),
+                    ));
+                };
+                match host.entity_x(name) {
+                    Ok(x) => Ok(Some(Value::F32(x))),
+                    Err(e) => Err(self.failure_at(ip, ErrorKind::HostFailed(e))),
+                }
+            }
+            "entity.y" => {
+                let [Value::Str(name)] = args else {
+                    return Err(self.failure_at(
+                        ip,
+                        ErrorKind::HostFailed("entity.y takes a string".to_string()),
+                    ));
+                };
+                match host.entity_y(name) {
+                    Ok(y) => Ok(Some(Value::F32(y))),
+                    Err(e) => Err(self.failure_at(ip, ErrorKind::HostFailed(e))),
+                }
+            }
+            "entity.destroy" => {
+                let [Value::Str(name)] = args else {
+                    return Err(self.failure_at(
+                        ip,
+                        ErrorKind::HostFailed("entity.destroy takes a string".to_string()),
+                    ));
+                };
+                match host.entity_destroy(name) {
+                    Ok(()) => Ok(None),
+                    Err(e) => Err(self.failure_at(ip, ErrorKind::HostFailed(e))),
+                }
+            }
+            "str.of_i" => {
+                let [Value::I32(v)] = args else {
+                    return Err(self.failure_at(
+                        ip,
+                        ErrorKind::HostFailed("str.of_i takes an i32".to_string()),
+                    ));
+                };
+                Ok(Some(Value::Str(v.to_string())))
+            }
+            "str.cat" => {
+                let [Value::Str(a), Value::Str(b)] = args else {
+                    return Err(self.failure_at(
+                        ip,
+                        ErrorKind::HostFailed("str.cat takes strings".to_string()),
+                    ));
+                };
+                Ok(Some(Value::Str(format!("{a}{b}"))))
+            }
+            "audio.play" => {
+                let [Value::Str(name)] = args else {
+                    return Err(self.failure_at(
+                        ip,
+                        ErrorKind::HostFailed("audio.play takes a string".to_string()),
+                    ));
+                };
+                host.audio_play(name);
+                Ok(None)
+            }
+            "audio.loop" => {
+                let [Value::Str(name)] = args else {
+                    return Err(self.failure_at(
+                        ip,
+                        ErrorKind::HostFailed("audio.loop takes a string".to_string()),
+                    ));
+                };
+                host.audio_loop(name);
+                Ok(None)
+            }
+            "audio.stop" => {
+                if !args.is_empty() {
+                    return Err(self.failure_at(
+                        ip,
+                        ErrorKind::HostFailed("audio.stop takes no arguments".to_string()),
+                    ));
+                }
+                host.audio_stop();
+                Ok(None)
+            }
+            "anim.play" => {
+                let [Value::Str(clip)] = args else {
+                    return Err(self.failure_at(
+                        ip,
+                        ErrorKind::HostFailed("anim.play takes a string".to_string()),
+                    ));
+                };
+                host.anim_play(clip);
+                Ok(None)
+            }
+            "game.restart" => {
+                if !args.is_empty() {
+                    return Err(self.failure_at(
+                        ip,
+                        ErrorKind::HostFailed("game.restart takes no arguments".to_string()),
+                    ));
+                }
+                host.game_restart();
+                Ok(None)
+            }
+            "game.set_title" => {
+                let [Value::Str(title)] = args else {
+                    return Err(self.failure_at(
+                        ip,
+                        ErrorKind::HostFailed("game.set_title takes a string".to_string()),
+                    ));
+                };
+                host.game_set_title(title);
+                Ok(None)
+            }
             _ => Err(self.failure_at(ip, ErrorKind::HostFailed(format!("unknown host '{path}'")))),
         }
     }
@@ -777,9 +941,47 @@ mod tests {
             self.keys.contains(&key)
         }
 
+        fn input_pressed(&mut self, key: i32) -> bool {
+            self.keys.contains(&key)
+        }
+
         fn transform_move(&mut self, dx: f32, dy: f32) {
             self.moves.push((dx, dy));
         }
+
+        fn transform_x(&mut self) -> f32 {
+            0.0
+        }
+
+        fn transform_y(&mut self) -> f32 {
+            0.0
+        }
+
+        fn transform_set(&mut self, _x: f32, _y: f32) {}
+
+        fn entity_x(&mut self, _name: &str) -> Result<f32, String> {
+            Err("none".to_string())
+        }
+
+        fn entity_y(&mut self, _name: &str) -> Result<f32, String> {
+            Err("none".to_string())
+        }
+
+        fn entity_destroy(&mut self, _name: &str) -> Result<(), String> {
+            Ok(())
+        }
+
+        fn audio_play(&mut self, _name: &str) {}
+
+        fn audio_loop(&mut self, _name: &str) {}
+
+        fn audio_stop(&mut self) {}
+
+        fn anim_play(&mut self, _clip: &str) {}
+
+        fn game_restart(&mut self) {}
+
+        fn game_set_title(&mut self, _title: &str) {}
 
         fn log(&mut self, msg: &str) {
             self.logs.push(msg.to_string());

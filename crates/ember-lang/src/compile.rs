@@ -685,9 +685,47 @@ mod tests {
             self.keys.contains(&key)
         }
 
+        fn input_pressed(&mut self, key: i32) -> bool {
+            self.keys.contains(&key)
+        }
+
         fn transform_move(&mut self, dx: f32, dy: f32) {
             self.moves.push((dx, dy));
         }
+
+        fn transform_x(&mut self) -> f32 {
+            0.0
+        }
+
+        fn transform_y(&mut self) -> f32 {
+            0.0
+        }
+
+        fn transform_set(&mut self, _x: f32, _y: f32) {}
+
+        fn entity_x(&mut self, _name: &str) -> Result<f32, String> {
+            Err("none".to_string())
+        }
+
+        fn entity_y(&mut self, _name: &str) -> Result<f32, String> {
+            Err("none".to_string())
+        }
+
+        fn entity_destroy(&mut self, _name: &str) -> Result<(), String> {
+            Ok(())
+        }
+
+        fn audio_play(&mut self, _name: &str) {}
+
+        fn audio_loop(&mut self, _name: &str) {}
+
+        fn audio_stop(&mut self) {}
+
+        fn anim_play(&mut self, _clip: &str) {}
+
+        fn game_restart(&mut self) {}
+
+        fn game_set_title(&mut self, _title: &str) {}
 
         fn log(&mut self, msg: &str) {
             self.logs.push(msg.to_string());

@@ -45,6 +45,7 @@ pub struct EditorApp {
     rename: String,
     play: Option<PlayState>,
     last_phys_sig: Vec<(u64, bool, bool, u8, u32, u32)>,
+    title_restore: bool,
 }
 
 fn physics_sig(scene: &Scene) -> Vec<(u64, bool, bool, u8, u32, u32)> {
@@ -107,7 +108,45 @@ impl Host for NoopHost {
         false
     }
 
+    fn input_pressed(&mut self, _key: i32) -> bool {
+        false
+    }
+
     fn transform_move(&mut self, _dx: f32, _dy: f32) {}
+
+    fn transform_x(&mut self) -> f32 {
+        0.0
+    }
+
+    fn transform_y(&mut self) -> f32 {
+        0.0
+    }
+
+    fn transform_set(&mut self, _x: f32, _y: f32) {}
+
+    fn entity_x(&mut self, name: &str) -> Result<f32, String> {
+        Err(format!("entity '{name}' not found"))
+    }
+
+    fn entity_y(&mut self, name: &str) -> Result<f32, String> {
+        Err(format!("entity '{name}' not found"))
+    }
+
+    fn entity_destroy(&mut self, _name: &str) -> Result<(), String> {
+        Ok(())
+    }
+
+    fn audio_play(&mut self, _name: &str) {}
+
+    fn audio_loop(&mut self, _name: &str) {}
+
+    fn audio_stop(&mut self) {}
+
+    fn anim_play(&mut self, _clip: &str) {}
+
+    fn game_restart(&mut self) {}
+
+    fn game_set_title(&mut self, _title: &str) {}
 
     fn log(&mut self, _msg: &str) {}
 }
@@ -162,6 +201,7 @@ impl EditorApp {
             rename: String::new(),
             play: None,
             last_phys_sig: Vec::new(),
+            title_restore: false,
         };
         app.reload();
         app
@@ -171,10 +211,7 @@ impl EditorApp {
         self.play.is_some()
     }
 
-    fn start_play(&mut self) {
-        if self.play.is_some() {
-            return;
-        }
+    fn build_play_runtime(&mut self) -> Result<Runtime, String> {
         let mut defs = Vec::new();
         for entity in &self.scene.entities {
             let Some(script) = &entity.script else {
@@ -189,8 +226,7 @@ impl EditorApp {
                     values: entity.script_values.clone(),
                 }),
                 Err(e) => {
-                    self.log(format!("error: read '{}': {e}", path.display()));
-                    return;
+                    return Err(format!("read '{}': {e}", path.display()));
                 }
             }
         }
@@ -200,6 +236,18 @@ impl EditorApp {
                 for line in logs {
                     self.log(line);
                 }
+                Ok(runtime)
+            }
+            Err(e) => Err(e.to_string()),
+        }
+    }
+
+    fn start_play(&mut self) {
+        if self.play.is_some() {
+            return;
+        }
+        match self.build_play_runtime() {
+            Ok(runtime) => {
                 self.play = Some(PlayState {
                     runtime,
                     last: std::time::Instant::now(),
@@ -213,7 +261,7 @@ impl EditorApp {
                 self.selection = None;
                 self.log("playing".to_string());
             }
-            Err(e) => self.log(format!("error: {e}")),
+            Err(message) => self.log(format!("error: {message}")),
         }
     }
 
@@ -224,7 +272,7 @@ impl EditorApp {
         }
     }
 
-    fn tick_play(&mut self, input: &GameInput, dt: f32) {
+    fn tick_play(&mut self, input: &mut GameInput, dt: f32) {
         enum Out {
             Logs(Vec<String>),
             Failed(String),
@@ -247,6 +295,28 @@ impl EditorApp {
             Out::Logs(logs) => {
                 for line in logs {
                     self.log(line);
+                }
+                let restart = match &mut self.play {
+                    Some(play) => play.runtime.take_restart_requested(),
+                    None => false,
+                };
+                if restart {
+                    match self.build_play_runtime() {
+                        Ok(runtime) => {
+                            if let Some(play) = &mut self.play {
+                                play.runtime = runtime;
+                                play.ticks = 0;
+                                play.sim_t = 0.0;
+                                play.last_dt = 0.0;
+                                self.last_phys_sig = physics_sig(play.runtime.scene());
+                            }
+                            self.log("restarted".to_string());
+                        }
+                        Err(message) => {
+                            self.log(format!("error: {message}"));
+                            self.stop_play();
+                        }
+                    }
                 }
             }
             Out::Failed(message) => {
@@ -672,7 +742,11 @@ impl EditorApp {
                     );
                 });
             } else if ui.button("+ Collider").clicked() {
-                entity.collider = Some(Collider2D { hx: 0.5, hy: 0.5 });
+                entity.collider = Some(Collider2D {
+                    hx: 0.5,
+                    hy: 0.5,
+                    sensor: false,
+                });
             }
             if let Some(body) = &mut entity.rigidbody {
                 ui.label("RigidBody");
@@ -922,20 +996,19 @@ impl eframe::App for EditorApp {
         if self.play.is_some() {
             let mut input = GameInput::new();
             ui.ctx().input(|i| {
-                if i.key_down(egui::Key::ArrowUp) {
-                    input.press(0);
-                }
-                if i.key_down(egui::Key::ArrowDown) {
-                    input.press(1);
-                }
-                if i.key_down(egui::Key::ArrowLeft) {
-                    input.press(2);
-                }
-                if i.key_down(egui::Key::ArrowRight) {
-                    input.press(3);
-                }
-                if i.key_down(egui::Key::Space) {
-                    input.press(4);
+                for (key, bit) in [
+                    (egui::Key::ArrowUp, 0),
+                    (egui::Key::ArrowDown, 1),
+                    (egui::Key::ArrowLeft, 2),
+                    (egui::Key::ArrowRight, 3),
+                    (egui::Key::Space, 4),
+                ] {
+                    if i.key_down(key) {
+                        input.press_down(bit);
+                    }
+                    if i.key_pressed(key) {
+                        input.press(bit);
+                    }
                 }
             });
             let escape = ui.ctx().input(|i| i.key_down(egui::Key::Escape));
@@ -966,8 +1039,22 @@ impl eframe::App for EditorApp {
                     }
                     None => 0.0,
                 };
-                self.tick_play(&input, dt);
+                self.tick_play(&mut input, dt);
+                let title = match &mut self.play {
+                    Some(play) => play.runtime.take_title(),
+                    None => None,
+                };
+                if let Some(title) = title {
+                    ui.ctx()
+                        .send_viewport_cmd(egui::ViewportCommand::Title(title));
+                    self.title_restore = true;
+                }
             }
+        }
+        if self.title_restore && self.play.is_none() {
+            ui.ctx()
+                .send_viewport_cmd(egui::ViewportCommand::Title("Ember".to_string()));
+            self.title_restore = false;
         }
         self.toolbar(ui);
         self.hierarchy(ui);
@@ -1071,13 +1158,32 @@ mod tests {
         let edit_before = app.scene.save_to_string().unwrap();
         let mut input = GameInput::new();
         input.press(3);
-        app.tick_play(&input, 1.0 / 60.0);
+        app.tick_play(&mut input, 1.0 / 60.0);
         let (rx, _) = pos_of(app.play.as_ref().unwrap().runtime.scene(), "Player");
         assert!(rx > 0.0);
         assert_eq!(pos_of(&app.scene, "Player").0, 0.0);
         app.stop_play();
         assert!(!app.playing());
         assert_eq!(app.scene.save_to_string().unwrap(), edit_before);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn play_restart_rebuilds_runtime() {
+        let (base, mut app) = test_app("restart");
+        let dir = base.join("Game");
+        std::fs::write(
+            dir.join("scripts").join("player.em"),
+            "var n: i32 = 0\nfn on_update(dt: f32) {\nn = n + 1\nif n > 1 {\ngame.restart()\n}\n}\n",
+        )
+        .unwrap();
+        app.start_play();
+        assert!(app.playing());
+        app.tick_play(&mut GameInput::new(), 1.0 / 60.0);
+        assert!(app.playing());
+        app.tick_play(&mut GameInput::new(), 1.0 / 60.0);
+        assert!(app.playing());
+        assert!(app.console.iter().any(|l| l == "restarted"));
         let _ = std::fs::remove_dir_all(&base);
     }
 
@@ -1103,7 +1209,7 @@ mod tests {
         .unwrap();
         app.start_play();
         assert!(app.playing());
-        app.tick_play(&GameInput::new(), 1.0 / 60.0);
+        app.tick_play(&mut GameInput::new(), 1.0 / 60.0);
         assert!(!app.playing());
         assert!(app.status.contains("division by zero"));
         let _ = std::fs::remove_dir_all(&base);
@@ -1301,11 +1407,15 @@ mod tests {
             velocity: Vec2::zero(),
             gravity_scale: 1.0,
         });
-        entity.collider = Some(Collider2D { hx: 0.5, hy: 0.5 });
+        entity.collider = Some(Collider2D {
+            hx: 0.5,
+            hy: 0.5,
+            sensor: false,
+        });
         app.start_play();
         assert!(app.playing());
         for _ in 0..60 {
-            app.tick_play(&GameInput::new(), 1.0 / 60.0);
+            app.tick_play(&mut GameInput::new(), 1.0 / 60.0);
         }
         let runtime_y = app
             .play

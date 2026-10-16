@@ -567,11 +567,26 @@ mod tests {
 
     #[test]
     fn unknown_host_fn() {
-        let errors = err("fn f() {\ninput.pressed(1)\n}\n");
+        let errors = err("fn f() {\ninput.nope(1)\n}\n");
         assert!(
             errors.iter().any(|e| e.contains("unknown host function")),
             "{errors:?}"
         );
+    }
+
+    #[test]
+    fn deferred_conversions_rejected() {
+        for src in [
+            "fn f() {\nvar x: f32 = f32.of_i(1)\n}\n",
+            "fn f() {\nvar x: i32 = i32.of_f(1.0)\n}\n",
+            "fn f() {\nlog(str.of_f(1.0))\n}\n",
+        ] {
+            let errors = err(src);
+            assert!(
+                errors.iter().any(|e| e.contains("unknown host function")),
+                "{src:?}: {errors:?}"
+            );
+        }
     }
 
     #[test]
