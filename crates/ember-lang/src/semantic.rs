@@ -1,8 +1,8 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::ast::*;
-use crate::host::{self, Ty};
-use crate::{Error, Span};
+use crate::host;
+use crate::{Error, Span, Ty};
 
 #[derive(Debug)]
 pub struct Checked {

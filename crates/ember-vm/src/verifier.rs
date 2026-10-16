@@ -43,6 +43,11 @@ fn err(f: &Function, offset: usize, message: String) -> VerifyError {
 }
 
 fn verify_fn(chunk: &Chunk, f: &Function) -> Result<(), VerifyError> {
+    check_structure(f)?;
+    check_types(chunk, f)
+}
+
+fn check_structure(f: &Function) -> Result<BTreeSet<usize>, VerifyError> {
     if f.params as usize > f.locals.len() {
         return Err(err(
             f,
@@ -82,14 +87,15 @@ fn verify_fn(chunk: &Chunk, f: &Function) -> Result<(), VerifyError> {
             ));
         }
     }
-    let u16_at = |at: usize| u16::from_le_bytes([f.code[at], f.code[at + 1]]) as usize;
-    let u32_at = |at: usize| {
-        u32::from_le_bytes([f.code[at], f.code[at + 1], f.code[at + 2], f.code[at + 3]]) as usize
-    };
     for &start in &bounds {
         match f.code[start] {
             op::JUMP | op::JUMP_IF_FALSE => {
-                let target = u32_at(start + 1);
+                let target = u32::from_le_bytes([
+                    f.code[start + 1],
+                    f.code[start + 2],
+                    f.code[start + 3],
+                    f.code[start + 4],
+                ]) as usize;
                 if !bounds.contains(&target) {
                     return Err(err(
                         f,
@@ -101,7 +107,14 @@ fn verify_fn(chunk: &Chunk, f: &Function) -> Result<(), VerifyError> {
             _ => {}
         }
     }
+    Ok(bounds)
+}
 
+fn check_types(chunk: &Chunk, f: &Function) -> Result<(), VerifyError> {
+    let u16_at = |at: usize| u16::from_le_bytes([f.code[at], f.code[at + 1]]) as usize;
+    let u32_at = |at: usize| {
+        u32::from_le_bytes([f.code[at], f.code[at + 1], f.code[at + 2], f.code[at + 3]]) as usize
+    };
     let mut entry: HashMap<usize, Vec<Ty>> = HashMap::new();
     let mut work = vec![(0usize, Vec::new())];
     while let Some((at, stack)) = work.pop() {

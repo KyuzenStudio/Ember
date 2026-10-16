@@ -1,10 +1,14 @@
 use std::ffi::OsString;
 use std::path::Path;
 
-struct Outcome {
-    code: i32,
-    stdout: String,
-    stderr: String,
+mod commands;
+
+use commands::{cmd_build, cmd_check, cmd_new, cmd_package};
+
+pub(crate) struct Outcome {
+    pub(crate) code: i32,
+    pub(crate) stdout: String,
+    pub(crate) stderr: String,
 }
 
 fn main() {
@@ -34,27 +38,6 @@ fn version() -> String {
     format!("ember {}", env!("CARGO_PKG_VERSION"))
 }
 
-fn resolve_player_exe() -> Result<std::path::PathBuf, String> {
-    let exe = std::env::current_exe().map_err(|e| format!("locate player: {e}"))?;
-    let name = if cfg!(windows) {
-        "ember-player.exe"
-    } else {
-        "ember-player"
-    };
-    let mut dir = exe.parent().map(|p| p.to_path_buf());
-    for _ in 0..3 {
-        let Some(parent) = dir else {
-            break;
-        };
-        let candidate = parent.join(name);
-        if candidate.is_file() {
-            return Ok(candidate);
-        }
-        dir = parent.parent().map(|p| p.to_path_buf());
-    }
-    Err("ember-player binary not found next to ember; build the workspace first".to_string())
-}
-
 fn usage() -> String {
     "Usage: ember [--version|--help]\n       ember new <name>\n       ember check [path]\n       ember build [path]\n       ember package [path]\n\nCommands:\n  new <name>      Create a new project in './<name>'\n  check [path]    Check scripts in a project without opening a window\n  build [path]    Validate and compile scripts to build/*.embc\n  package [path]  Bundle a standalone Windows game folder\n\nOptions:\n  --version, -V  Print version and exit\n  --help, -h     Print this help and exit\n"
         .to_string()
@@ -80,132 +63,25 @@ fn dispatch(args: &[OsString], cwd: &Path) -> Outcome {
             stdout: usage(),
             stderr: String::new(),
         },
-        "new" if args.len() == 2 => {
-            let name = args[1].to_string_lossy().into_owned();
-            let dir = cwd.join(&args[1]);
-            match ember_project::create_project(&dir, &name) {
-                Ok(()) => Outcome {
-                    code: 0,
-                    stdout: format!("created '{name}' in '{}'\n", dir.display()),
-                    stderr: String::new(),
-                },
-                Err(e) => Outcome {
-                    code: 1,
-                    stdout: String::new(),
-                    stderr: format!("error: {e}\n"),
-                },
-            }
-        }
+        "new" if args.len() == 2 => cmd_new(args, cwd),
         "new" => Outcome {
             code: 2,
             stdout: String::new(),
             stderr: "error: usage: ember new <name>\n".to_string(),
         },
-        "check" if args.len() <= 2 => {
-            let dir = if args.len() == 2 {
-                cwd.join(&args[1])
-            } else {
-                cwd.to_path_buf()
-            };
-            if !dir.is_dir() {
-                return Outcome {
-                    code: 1,
-                    stdout: String::new(),
-                    stderr: format!("error: '{}' is not a directory\n", dir.display()),
-                };
-            }
-            match ember_project::check_dir(&dir) {
-                Ok(report) if report.errors.is_empty() => Outcome {
-                    code: 0,
-                    stdout: format!("ok: {} script(s) checked\n", report.checked),
-                    stderr: String::new(),
-                },
-                Ok(report) => {
-                    let mut stderr = String::new();
-                    for e in &report.errors {
-                        stderr.push_str(&format!("{e}\n"));
-                    }
-                    Outcome {
-                        code: 1,
-                        stdout: String::new(),
-                        stderr,
-                    }
-                }
-                Err(e) => Outcome {
-                    code: 1,
-                    stdout: String::new(),
-                    stderr: format!("error: {e}\n"),
-                },
-            }
-        }
+        "check" if args.len() <= 2 => cmd_check(args, cwd),
         "check" => Outcome {
             code: 2,
             stdout: String::new(),
             stderr: "error: usage: ember check [path]\n".to_string(),
         },
-        "build" if args.len() <= 2 => {
-            let dir = if args.len() == 2 {
-                cwd.join(&args[1])
-            } else {
-                cwd.to_path_buf()
-            };
-            match ember_project::build_project(&dir) {
-                Ok(report) => Outcome {
-                    code: 0,
-                    stdout: format!(
-                        "built {} script(s) to '{}'\n",
-                        report.scripts,
-                        dir.join("build").display()
-                    ),
-                    stderr: String::new(),
-                },
-                Err(e) => Outcome {
-                    code: 1,
-                    stdout: String::new(),
-                    stderr: format!("error: {e}\n"),
-                },
-            }
-        }
+        "build" if args.len() <= 2 => cmd_build(args, cwd),
         "build" => Outcome {
             code: 2,
             stdout: String::new(),
             stderr: "error: usage: ember build [path]\n".to_string(),
         },
-        "package" if args.len() <= 2 => {
-            let dir = if args.len() == 2 {
-                cwd.join(&args[1])
-            } else {
-                cwd.to_path_buf()
-            };
-            let player = match resolve_player_exe() {
-                Ok(p) => p,
-                Err(e) => {
-                    return Outcome {
-                        code: 1,
-                        stdout: String::new(),
-                        stderr: format!("error: {e}\n"),
-                    };
-                }
-            };
-            match ember_project::package_project(&dir, &player) {
-                Ok(report) => {
-                    let mut stdout = format!("packaged '{}'\n", report.dir.display());
-                    for file in &report.files {
-                        stdout.push_str(&format!("  {file}\n"));
-                    }
-                    Outcome {
-                        code: 0,
-                        stdout,
-                        stderr: String::new(),
-                    }
-                }
-                Err(e) => Outcome {
-                    code: 1,
-                    stdout: String::new(),
-                    stderr: format!("error: {e}\n"),
-                },
-            }
-        }
+        "package" if args.len() <= 2 => cmd_package(args, cwd),
         "package" => Outcome {
             code: 2,
             stdout: String::new(),
@@ -222,6 +98,7 @@ fn dispatch(args: &[OsString], cwd: &Path) -> Outcome {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::commands::resolve_player_exe;
 
     fn arg(s: &str) -> OsString {
         OsString::from(s)

@@ -1,9 +1,11 @@
 pub mod ast;
 pub mod compile;
-pub mod host;
 pub mod lexer;
 pub mod parser;
 pub mod semantic;
+
+pub use ember_core::Ty;
+pub use ember_core::host;
 
 use std::fmt;
 

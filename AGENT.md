@@ -12,6 +12,7 @@
 5. **Native compilation dilarang** sampai stability gate (bagian 6) terpenuhi dan keputusan terpisah dicatat.
 6. **Patuhi non-goals** di `PRODUCT.md`. Jangan menyelipkan fitur di luar scope.
 7. **Jujur soal platform.** Jangan mengklaim tes Windows berhasil jika tidak benar-benar dijalankan di Windows. Laporkan platform tempat tes dijalankan.
+8. **Patuhi standar rekayasa.** Baca `ENGINEERING_STANDARDS.md` (batas file/fungsi, naming, dependensi, format dibekukan) dan `ARCHITECTURE.md` (tanggung jawab crate) sebelum refactor atau tambah modul. Pengecualian tercatat di standar §8; checker: `python3 scripts/check_source_limits.py`.
 
 ## 2. Prosedur audit (wajib sebelum perubahan kode)
 
