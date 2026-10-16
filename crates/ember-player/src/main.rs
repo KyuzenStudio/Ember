@@ -99,10 +99,10 @@ impl App {
         }
         let mut sizes = std::collections::HashMap::new();
         for entity in &runtime.scene().entities {
-            if let Some(sprite) = &entity.sprite
-                && let Some(size) = renderer.texture_size(&sprite.texture)
-            {
-                sizes.insert(sprite.texture.clone(), size);
+            for path in entity.texture_paths() {
+                if let Some(size) = renderer.texture_size(path) {
+                    sizes.insert(path.to_string(), size);
+                }
             }
         }
         let (camera, draws) = ember_renderer::scene_sprites(runtime.scene(), &sizes);
@@ -148,22 +148,21 @@ impl ApplicationHandler for App {
             }
         };
         for entity in &game.scene.entities {
-            let Some(sprite) = &entity.sprite else {
-                continue;
-            };
-            let path = self.dir.join(&sprite.texture);
-            match load_png_file(&path) {
-                Ok(img) => {
-                    if let Err(e) = renderer.cache_texture(&sprite.texture, &img) {
+            for path in entity.texture_paths() {
+                let full = self.dir.join(path);
+                match load_png_file(&full) {
+                    Ok(img) => {
+                        if let Err(e) = renderer.cache_texture(path, &img) {
+                            self.error = Some(e.to_string());
+                            event_loop.exit();
+                            return;
+                        }
+                    }
+                    Err(e) => {
                         self.error = Some(e.to_string());
                         event_loop.exit();
                         return;
                     }
-                }
-                Err(e) => {
-                    self.error = Some(e.to_string());
-                    event_loop.exit();
-                    return;
                 }
             }
         }

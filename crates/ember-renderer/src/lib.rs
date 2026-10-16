@@ -617,7 +617,10 @@ pub fn scene_sprites(
         let Some(sprite) = &entity.sprite else {
             continue;
         };
-        let Some((w, h)) = sizes.get(&sprite.texture).copied() else {
+        let Some(texture) = entity.frame_texture() else {
+            continue;
+        };
+        let Some((w, h)) = sizes.get(texture).copied() else {
             continue;
         };
         let aspect = w as f32 / h.max(1) as f32;
@@ -630,7 +633,7 @@ pub fn scene_sprites(
         ordered.push((
             sprite.sorting_order,
             DrawReq {
-                texture: sprite.texture.clone(),
+                texture: texture.to_string(),
                 corners,
                 tint: sprite.tint,
             },
@@ -1314,6 +1317,36 @@ mod tests {
     #[test]
     fn shader_parses() {
         naga::front::wgsl::parse_str(SHADER).expect("shader must parse");
+    }
+
+    #[test]
+    fn draws_use_anim_frame() {
+        use ember_scene::{AnimClip, SpriteAnim, SpriteRenderer};
+        let mut scene = ember_scene::Scene::new("anim");
+        let id = scene.spawn("Hero");
+        let e = scene.entities.iter_mut().find(|e| e.id == id).unwrap();
+        e.sprite = Some(SpriteRenderer {
+            texture: "idle.png".to_string(),
+            tint: [1.0, 1.0, 1.0, 1.0],
+            sorting_order: 0,
+        });
+        e.anim = Some(SpriteAnim {
+            clips: vec![AnimClip {
+                name: "walk".to_string(),
+                frames: vec!["w0.png".to_string(), "w1.png".to_string()],
+                fps: 2.0,
+                looped: true,
+            }],
+            current: "walk".to_string(),
+            t: 0.6,
+        });
+        let mut sizes = std::collections::HashMap::new();
+        sizes.insert("idle.png".to_string(), (8, 8));
+        sizes.insert("w0.png".to_string(), (8, 8));
+        sizes.insert("w1.png".to_string(), (8, 8));
+        let (_, draws) = scene_sprites(&scene, &sizes);
+        assert_eq!(draws.len(), 1);
+        assert_eq!(draws[0].texture, "w1.png");
     }
 
     #[test]

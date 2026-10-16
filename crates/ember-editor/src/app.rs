@@ -401,28 +401,27 @@ impl EditorApp {
     ) -> Vec<String> {
         let mut events = Vec::new();
         for entity in &scene.entities {
-            let Some(sprite) = &entity.sprite else {
-                continue;
-            };
-            if sizes.contains_key(&sprite.texture) {
-                continue;
-            }
-            if missing.contains(&sprite.texture) && !retry_missing {
-                continue;
-            }
-            match load_png_file(&dir.join(&sprite.texture)) {
-                Ok(img) => {
-                    sizes.insert(sprite.texture.clone(), (img.width, img.height));
-                    missing.remove(&sprite.texture);
-                    if let Err(e) = off.cache_texture(&sprite.texture, &img) {
-                        *status = format!("error: {e}");
-                    } else {
-                        events.push(format!("loaded '{}'", sprite.texture));
-                    }
+            for path in entity.texture_paths() {
+                if sizes.contains_key(path) {
+                    continue;
                 }
-                Err(e) => {
-                    *status = format!("error: {e}");
-                    missing.insert(sprite.texture.clone());
+                if missing.contains(path) && !retry_missing {
+                    continue;
+                }
+                match load_png_file(&dir.join(path)) {
+                    Ok(img) => {
+                        sizes.insert(path.to_string(), (img.width, img.height));
+                        missing.remove(path);
+                        if let Err(e) = off.cache_texture(path, &img) {
+                            *status = format!("error: {e}");
+                        } else {
+                            events.push(format!("loaded '{path}'"));
+                        }
+                    }
+                    Err(e) => {
+                        *status = format!("error: {e}");
+                        missing.insert(path.to_string());
+                    }
                 }
             }
         }

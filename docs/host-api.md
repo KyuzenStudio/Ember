@@ -18,7 +18,7 @@ tidak didaftarkan (checker menolak sebagai unknown host function).
 | `str.cat` | `string, string` | `string` | gabung string (murni) |
 | `audio.play` / `audio.loop` | `string` (path aset) | `void` | antre perintah audio; backend nyata di M19 |
 | `audio.stop` | — | `void` | antre henti audio |
-| `anim.play` | `string` (klip) | `void` | antre ganti klip; komponen klip di M18 |
+| `anim.play` | `string` (klip) | `void` | ganti klip + reset waktu; klip tak dikenal dicatat di log |
 | `game.restart` | — | `void` | minta bangun ulang runtime (state script ter-reset) |
 | `game.set_title` | `string` | `void` | judul window berikutnya (diabaikan bila tanpa window) |
 

@@ -102,6 +102,52 @@ fn x_of(rt: &Runtime, name: &str) -> f32 {
 }
 
 #[test]
+fn anim_switch_changes_drawn_frame() {
+    use ember_scene::{AnimClip, SpriteAnim, SpriteRenderer};
+    let mut scene = ember_scene::Scene::new("anim");
+    let id = scene.spawn("Hero");
+    let e = scene.entities.iter_mut().find(|e| e.id == id).unwrap();
+    e.sprite = Some(SpriteRenderer {
+        texture: "idle.png".to_string(),
+        tint: [1.0, 1.0, 1.0, 1.0],
+        sorting_order: 0,
+    });
+    e.anim = Some(SpriteAnim {
+        clips: vec![AnimClip {
+            name: "walk".to_string(),
+            frames: vec!["w0.png".to_string(), "w1.png".to_string()],
+            fps: 8.0,
+            looped: true,
+        }],
+        current: "idle".to_string(),
+        t: 0.0,
+    });
+    let src = "fn on_create() {\nanim.play(\"walk\")\n}\nfn on_update(dt: f32) {\n}\n";
+    let mut rt = Runtime::load(
+        scene,
+        vec![ScriptDef {
+            entity: id,
+            file: "a.em".to_string(),
+            source: src.to_string(),
+            values: HashMap::new(),
+        }],
+        &mut Vec::new(),
+    )
+    .unwrap();
+    let mut sizes = HashMap::new();
+    sizes.insert("idle.png".to_string(), (8, 8));
+    sizes.insert("w0.png".to_string(), (8, 8));
+    sizes.insert("w1.png".to_string(), (8, 8));
+    let draws = |rt: &Runtime| ember_renderer::scene_sprites(rt.scene(), &sizes).1;
+    rt.tick(&mut InputState::new(), 0.05, &mut Vec::new())
+        .unwrap();
+    assert_eq!(draws(&rt)[0].texture, "w0.png");
+    rt.tick(&mut InputState::new(), 0.2, &mut Vec::new())
+        .unwrap();
+    assert_eq!(draws(&rt)[0].texture, "w1.png");
+}
+
+#[test]
 fn jump_rises_and_lands() {
     let (mut rt, _) = coin_dash();
     let mut input = InputState::new();

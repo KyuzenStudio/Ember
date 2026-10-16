@@ -163,6 +163,14 @@ impl Runtime {
                         .map_err(SpawnError::Runtime)?;
                 }
                 logs.extend(host.take_logs());
+                runtime.pending_audio.extend(host.take_audio());
+                runtime.pending_anim.extend(host.take_anim());
+                if let Some(title) = host.take_title() {
+                    runtime.pending_title = Some(title);
+                }
+                if host.take_restart() {
+                    runtime.restart_requested = true;
+                }
             }
             {
                 let inst = &mut runtime.instances[i];
@@ -183,6 +191,14 @@ impl Runtime {
                         .map_err(SpawnError::Runtime)?;
                 }
                 logs.extend(host.take_logs());
+                runtime.pending_audio.extend(host.take_audio());
+                runtime.pending_anim.extend(host.take_anim());
+                if let Some(title) = host.take_title() {
+                    runtime.pending_title = Some(title);
+                }
+                if host.take_restart() {
+                    runtime.restart_requested = true;
+                }
             }
         }
         Ok(runtime)
@@ -197,6 +213,11 @@ impl Runtime {
         let pressed = input.take_pressed();
         if let Some(physics) = &mut self.physics {
             physics.tick(&mut self.scene.entities, dt);
+        }
+        for entity in self.scene.entities.iter_mut() {
+            if let Some(anim) = &mut entity.anim {
+                anim.t += dt;
+            }
         }
         let contacts = match &mut self.physics {
             Some(physics) => physics.take_contacts(),
@@ -232,6 +253,17 @@ impl Runtime {
         }
         if !late_destroyed.is_empty() {
             self.apply_destroyed(&late_destroyed);
+        }
+        let anim_reqs = std::mem::take(&mut self.pending_anim);
+        for (entity, clip) in anim_reqs {
+            let target = self.scene.entities.iter_mut().find(|e| e.id == entity);
+            match target.and_then(|e| e.anim.as_mut()) {
+                Some(anim) if anim.has_clip(&clip) => {
+                    anim.current = clip;
+                    anim.t = 0.0;
+                }
+                _ => logs.push(format!("unknown anim clip '{clip}'")),
+            }
         }
         Ok(())
     }
@@ -299,10 +331,6 @@ impl Runtime {
 
     pub fn take_audio(&mut self) -> Vec<AudioCmd> {
         std::mem::take(&mut self.pending_audio)
-    }
-
-    pub fn take_anim(&mut self) -> Vec<(EntityId, String)> {
-        std::mem::take(&mut self.pending_anim)
     }
 
     pub fn take_title(&mut self) -> Option<String> {
@@ -892,11 +920,30 @@ mod tests {
 
     #[test]
     fn audio_anim_title_recorded() {
-        let (scene, id) = scene_with_player();
+        use ember_scene::{AnimClip, SpriteAnim};
+        let (mut scene, id) = scene_with_player();
+        scene.entities.iter_mut().find(|e| e.id == id).unwrap().anim = Some(SpriteAnim {
+            clips: vec![
+                AnimClip {
+                    name: "idle".to_string(),
+                    frames: vec!["i0.png".to_string()],
+                    fps: 1.0,
+                    looped: false,
+                },
+                AnimClip {
+                    name: "walk".to_string(),
+                    frames: vec!["w0.png".to_string(), "w1.png".to_string()],
+                    fps: 8.0,
+                    looped: true,
+                },
+            ],
+            current: "idle".to_string(),
+            t: 0.0,
+        });
         let src = "fn on_update(dt: f32) {\naudio.play(\"jump.wav\")\naudio.loop(\"music.ogg\")\naudio.stop()\nanim.play(\"walk\")\ngame.set_title(\"hi\")\n}\n";
         let mut rt = Runtime::load(scene, vec![def(id, src)], &mut Vec::new()).unwrap();
-        rt.tick(&mut InputState::new(), 0.5, &mut Vec::new())
-            .unwrap();
+        let mut logs = Vec::new();
+        rt.tick(&mut InputState::new(), 0.5, &mut logs).unwrap();
         assert_eq!(
             rt.take_audio(),
             vec![
@@ -905,9 +952,62 @@ mod tests {
                 AudioCmd::Stop,
             ]
         );
-        assert_eq!(rt.take_anim(), vec![(id, "walk".to_string())]);
+        let anim = rt
+            .scene()
+            .entities
+            .iter()
+            .find(|e| e.id == id)
+            .unwrap()
+            .anim
+            .as_ref()
+            .unwrap();
+        assert_eq!(anim.current, "walk");
+        assert_eq!(anim.t, 0.0);
         assert_eq!(rt.take_title(), Some("hi".to_string()));
         assert_eq!(rt.take_title(), None);
+    }
+
+    #[test]
+    fn anim_clock_advances_with_dt() {
+        use ember_scene::{AnimClip, SpriteAnim};
+        let (mut scene, id) = scene_with_player();
+        scene.entities.iter_mut().find(|e| e.id == id).unwrap().anim = Some(SpriteAnim {
+            clips: vec![AnimClip {
+                name: "idle".to_string(),
+                frames: vec!["i0.png".to_string()],
+                fps: 1.0,
+                looped: false,
+            }],
+            current: "idle".to_string(),
+            t: 0.0,
+        });
+        let mut rt = Runtime::load(scene, vec![], &mut Vec::new()).unwrap();
+        rt.tick(&mut InputState::new(), 0.25, &mut Vec::new())
+            .unwrap();
+        let t = rt
+            .scene()
+            .entities
+            .iter()
+            .find(|e| e.id == id)
+            .unwrap()
+            .anim
+            .as_ref()
+            .unwrap()
+            .t;
+        assert_eq!(t, 0.25);
+    }
+
+    #[test]
+    fn unknown_anim_clip_logs() {
+        let (scene, id) = scene_with_player();
+        let src = "fn on_update(dt: f32) {\nanim.play(\"nope\")\n}\n";
+        let mut rt = Runtime::load(scene, vec![def(id, src)], &mut Vec::new()).unwrap();
+        let mut logs = Vec::new();
+        rt.tick(&mut InputState::new(), 0.5, &mut logs).unwrap();
+        assert!(
+            logs.contains(&"unknown anim clip 'nope'".to_string()),
+            "{logs:?}"
+        );
     }
 
     #[test]

@@ -4,7 +4,7 @@ use std::path::Path;
 use ember_core::Vec2;
 use serde::{Deserialize, Serialize};
 
-pub const SCENE_FORMAT_VERSION: u32 = 2;
+pub const SCENE_FORMAT_VERSION: u32 = 3;
 
 #[derive(Debug, Clone)]
 pub struct SceneError(String);
@@ -57,6 +57,43 @@ pub struct Collider2D {
     pub sensor: bool,
 }
 
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct AnimClip {
+    pub name: String,
+    pub frames: Vec<String>,
+    pub fps: f32,
+    #[serde(default)]
+    pub looped: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SpriteAnim {
+    pub clips: Vec<AnimClip>,
+    pub current: String,
+    #[serde(default)]
+    pub t: f32,
+}
+
+impl SpriteAnim {
+    pub fn frame_at(&self, t: f32) -> Option<&str> {
+        let clip = self.clips.iter().find(|c| c.name == self.current)?;
+        if clip.frames.is_empty() {
+            return None;
+        }
+        let idx = (t.max(0.0) * clip.fps.max(0.0)) as usize;
+        let i = if clip.looped {
+            idx % clip.frames.len()
+        } else {
+            idx.min(clip.frames.len() - 1)
+        };
+        clip.frames.get(i).map(String::as_str)
+    }
+
+    pub fn has_clip(&self, name: &str) -> bool {
+        self.clips.iter().any(|c| c.name == name)
+    }
+}
+
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum BodyKind {
     Static,
@@ -93,6 +130,35 @@ pub struct Entity {
     pub collider: Option<Collider2D>,
     #[serde(default)]
     pub rigidbody: Option<RigidBody2D>,
+    #[serde(default)]
+    pub anim: Option<SpriteAnim>,
+}
+
+impl Entity {
+    pub fn frame_texture(&self) -> Option<&str> {
+        let sprite = self.sprite.as_ref()?;
+        if let Some(anim) = &self.anim
+            && let Some(frame) = anim.frame_at(anim.t)
+        {
+            return Some(frame);
+        }
+        Some(sprite.texture.as_str())
+    }
+
+    pub fn texture_paths(&self) -> Vec<&str> {
+        let mut out = Vec::new();
+        if let Some(sprite) = &self.sprite {
+            out.push(sprite.texture.as_str());
+        }
+        if let Some(anim) = &self.anim {
+            for clip in &anim.clips {
+                for frame in &clip.frames {
+                    out.push(frame.as_str());
+                }
+            }
+        }
+        out
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -124,6 +190,7 @@ impl Scene {
             script_values: std::collections::HashMap::new(),
             collider: None,
             rigidbody: None,
+            anim: None,
         });
         id
     }
@@ -140,7 +207,7 @@ impl Scene {
     pub fn load_from_str(src: &str, source: &str) -> Result<Self, SceneError> {
         let scene: Scene =
             ron::from_str(src).map_err(|e| SceneError(format!("parse '{source}': {e}")))?;
-        if scene.format_version != SCENE_FORMAT_VERSION && scene.format_version != 1 {
+        if !(1..=SCENE_FORMAT_VERSION).contains(&scene.format_version) {
             return Err(SceneError(format!(
                 "parse '{source}': unsupported format version {}, expected {SCENE_FORMAT_VERSION}",
                 scene.format_version
@@ -313,6 +380,77 @@ mod tests {
         let loaded = Scene::load_from_str(&scene.save_to_string().unwrap(), "test").unwrap();
         assert_eq!(loaded, scene);
         assert!(loaded.entities[0].collider.as_ref().unwrap().sensor);
+    }
+
+    #[test]
+    fn v2_scene_without_anim_loads() {
+        let src = "(format_version: 2, name: \"old\", entities: [(
+            id: (1), name: \"E\", transform: (position: (x: 0.0, y: 0.0),
+            rotation_degrees: 0.0, scale: (x: 1.0, y: 1.0)),
+            sprite: None, camera: None, script: None, script_values: {},
+            collider: None, rigidbody: None)])";
+        let loaded = Scene::load_from_str(src, "old.ron").unwrap();
+        assert!(loaded.entities[0].anim.is_none());
+    }
+
+    #[test]
+    fn anim_round_trip() {
+        let mut scene = Scene::new("anim");
+        let id = scene.spawn("Hero");
+        scene.entities.iter_mut().find(|e| e.id == id).unwrap().anim = Some(SpriteAnim {
+            clips: vec![
+                AnimClip {
+                    name: "idle".to_string(),
+                    frames: vec!["i0.png".to_string()],
+                    fps: 1.0,
+                    looped: false,
+                },
+                AnimClip {
+                    name: "walk".to_string(),
+                    frames: vec!["w0.png".to_string(), "w1.png".to_string()],
+                    fps: 8.0,
+                    looped: true,
+                },
+            ],
+            current: "walk".to_string(),
+            t: 0.0,
+        });
+        let loaded = Scene::load_from_str(&scene.save_to_string().unwrap(), "test").unwrap();
+        assert_eq!(loaded, scene);
+    }
+
+    #[test]
+    fn frame_picks_by_time() {
+        let anim = SpriteAnim {
+            clips: vec![AnimClip {
+                name: "walk".to_string(),
+                frames: vec!["w0.png".to_string(), "w1.png".to_string()],
+                fps: 2.0,
+                looped: true,
+            }],
+            current: "walk".to_string(),
+            t: 0.0,
+        };
+        assert_eq!(anim.frame_at(0.0), Some("w0.png"));
+        assert_eq!(anim.frame_at(0.5), Some("w1.png"));
+        assert_eq!(anim.frame_at(1.0), Some("w0.png"));
+        let once = SpriteAnim {
+            clips: vec![AnimClip {
+                name: "hit".to_string(),
+                frames: vec!["h0.png".to_string(), "h1.png".to_string()],
+                fps: 2.0,
+                looped: false,
+            }],
+            current: "hit".to_string(),
+            t: 0.0,
+        };
+        assert_eq!(once.frame_at(99.0), Some("h1.png"));
+        let missing = SpriteAnim {
+            clips: vec![],
+            current: "nope".to_string(),
+            t: 0.0,
+        };
+        assert_eq!(missing.frame_at(0.0), None);
     }
 
     #[test]
