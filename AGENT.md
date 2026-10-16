@@ -178,23 +178,24 @@ Status penutupan v0.1 (2026-10-16, `docs/VERIFICATION_REPORT_V01.md`):
 - [x] Dokumentasi menjelaskan setup, syntax, workflow, dan keterbatasan. Bukti: `README.md` + `docs/` (termasuk `KNOWN_LIMITATIONS.md`).
 - [x] Tidak ada native compiler yang diselipkan ke v0.1. Bukti: `cargo tree --locked` tanpa llvm/cranelift/jit.
 
-## 7b. Acceptance checklist v0.2 (kosong — belum dicentang)
+## 7b. Acceptance checklist v0.2 (ditutup 2026-10-16, `docs/VERIFICATION_REPORT_V02.md`)
 
 Centang hanya dengan bukti di verification report v0.2. Cerminan `PRODUCT.md` bagian 12:
 
-- [ ] CI Windows hijau (build + test + clippy + fmt) tercatat.
-- [ ] Fuzz/corpus malformed tidak menjatuhkan lexer/parser/verifier.
-- [ ] Baseline performa tercatat (angka, bukan klaim).
-- [ ] Script membaca posisi entity lain dan memindahkan kamera mengikuti player.
-- [ ] `input.pressed` memicu lompat tepat sekali per tekan.
-- [ ] Koin hilang saat disentuh dan skor bertambah (event collision).
-- [ ] Musuh patroli mengurangi nyawa dan me-respawn player.
-- [ ] Animasi jalan berganti frame sesuai gerak; klip bisa diganti dari script.
-- [ ] SFX dan musik loop terdengar di Play editor dan di package.
-- [ ] `ember package` menyertakan aset audio; game paket bersuara tanpa source.
-- [ ] Drag entity di viewport, undo/redo, multi-select bekerja tanpa merusak scene.
-- [ ] Coin Dash selesai dimainkan dari awal sampai menang, dari editor dan dari package.
-- [ ] Tidak ada fitur bahasa di luar kebutuhan game contoh; larangan bahasa tetap utuh.
+- [ ] CI Windows hijau (build + test + clippy + fmt) tercatat. BELUM: payment
+  GitHub terblokir; pengganti lokal hijau tercatat di tiap laporan M15–M21.
+- [x] Fuzz/corpus malformed tidak menjatuhkan lexer/parser/verifier. Bukti: M15.
+- [x] Baseline performa tercatat (angka, bukan klaim). Bukti: `docs/PERF_BASELINE.md`.
+- [x] Script membaca posisi entity lain dan memindahkan kamera mengikuti player. Bukti: `cam.em` + tes + manual.
+- [x] `input.pressed` memicu lompat tepat sekali per tekan. Bukti: tes lompat + manual.
+- [x] Koin hilang saat disentuh dan skor bertambah (event collision). Bukti: `score:1..3` + manual.
+- [x] Musuh patroli mengurangi nyawa dan me-respawn player. Bukti: tes + `lives:*` + manual `GAME OVER`.
+- [x] Animasi jalan berganti frame sesuai gerak; klip bisa diganti dari script. Bukti: tes + sampel + manual.
+- [x] SFX dan musik loop terdengar di Play editor dan di package. Bukti: tes audio + manual dua-duanya.
+- [x] `ember package` menyertakan aset audio; game paket bersuara tanpa source. Bukti: tes paket + tes load + exe 10 detik.
+- [x] Drag entity di viewport, undo/redo, multi-select bekerja tanpa merusak scene. Bukti: M20.
+- [x] Coin Dash selesai dimainkan dari awal sampai menang, dari editor dan dari package. Bukti: headless + exe + manual.
+- [x] Tidak ada fitur bahasa di luar kebutuhan game contoh; larangan bahasa tetap utuh. Bukti: nol perubahan grammar M15–M21.
 
 ## 8. Larangan ringkas
 
